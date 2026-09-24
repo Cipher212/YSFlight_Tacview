@@ -121,8 +121,9 @@ shadows), `dnm_model.gd` (YSFlight `.dnm`/`.srf` models, cached in
   `destroyed_t` (drawn until then, then hidden); a tie or a rejected candidate sets
   `destroyed_check`; the reasons are in `destroyed_evidence`. A credit on an object never
   destroyed becomes an unconfirmed credit with those reasons (via `track_end` = last seen
-  standing). Assumes objects don't respawn (asked the user, 2026-09-24). Events built before
-  this fall back to the first state-1 sample of the object's own replay.
+  standing). Ground objects never come back once killed (the user: only a server reset would,
+  and that doesn't happen in an RvB event). Events built before this fall back to the first
+  state-1 sample of the object's own replay.
 - Aircraft shadows (user request, "like YSFlight"), as FsSimulation::SimDrawComplexShadow: every
   part flattened straight down onto the plane of the ground under the aircraft (the terrain
   triangle there from `map_layer.ground_at`, else sea level 0), plain black, 0.4 m up and pulled
@@ -312,9 +313,8 @@ Agreed next steps, in order:
   and A2A trails must differ from rockets, bombs, fuel tanks and AGMs.
 - They tested that build: "works really well". Then: ground objects must disappear when
   destroyed, decided by a rule (players got kill messages for objects still there and firing),
-  and aircraft need YSFlight-style shadows for depth. Open question put to them: do RvB ground
-  objects ever respawn? (the rule assumes not). RvB 6 kill counts may drop when rebuilt: false
-  ground kills become unconfirmed credits.
+  and aircraft need YSFlight-style shadows for depth. RvB 6 kill counts may drop when rebuilt:
+  false ground kills become unconfirmed credits.
 
 ## From the third chat (cloud, 2026-09-24)
 
@@ -324,4 +324,5 @@ Agreed next steps, in order:
   things, UI may start to get cluttered"; v1 permanent release: go ahead. Also: snap to a
   top-down map view; deeper missile checks yes; settings for improved shading / lighting that
   can be turned off. They asked for the .exe to be repacked for testing after each batch.
-- Still unanswered: do RvB ground objects ever respawn? (the ground rule assumes not).
+- Answered: RvB ground objects never respawn once killed (only a server reset would, and that
+  doesn't happen in an RvB event).
