@@ -18,21 +18,26 @@ The replays (`Raw_Data/`) and events (`events/`) are not in the repository (too 
 
 `replay_parser.py` (CLI; the viewer runs it via `event_builder.gd`, prints `PROGRESS n text`):
 1. `yfs_reader.read_file` (pass 1, per replay, in parallel): thinned tracks, kills, events,
-   loadouts, recorder, and how each track ends (`end`: tumbled?). `read_details` (pass 2): full
-   tracks and weapon launches, only from the replay chosen for each sortie.
+   loadouts, recorder, how each track ends (`end`: tumbled?), ground objects' launch times
+   (`ground_fire`) and whom each aircraft aimed air-to-air missiles at (`a2a_targets`).
+   `read_details` (pass 2): full tracks and weapon launches, only from the replay chosen for each
+   sortie, plus the full tracks of its pilots' missile targets as that replay recorded them.
 2. `event_merge.py`: clock alignment (anchors: kills, server-wide messages, spawns), match check
    by positions, per-replay delay, sortie identity across replays (label + position <500 m; the
    pilot's own replay preferred), ground objects and when each was destroyed (`ground_fates`,
    rule below), kills: **one death, one kill** (credit: the victim's game, else the shooter's,
    else most games; `other_claims`, unconfirmed credits).
-3. `gamedata.py`: ground `.dat` (GUNRANGE, SAMRANGE, HTRADIUS, STRENGTH) and each object's box
-   from the ground lists (`gro*.lst`: `<dat> <model> <collision> <cockpit> <coarse>`).
+3. `gamedata.py`: ground `.dat` (GUNRANGE, SAMRANGE, HTRADIUS, STRENGTH; a key given twice: the
+   last wins, as in the game - the 2S6M's SAMRANGE 6000m then 2000m) and each object's box from
+   the ground lists (`gro*.lst`: `<dat> <model> <collision> <cockpit> <coarse>`).
 4. `fld_reader.py` (`load_map`): the `.fld` -> `maps/<FIELD>.json` (format 3) and a terrain
    height lookup; `--fld` picks the file (the start menu passes it).
 5. `weapon_sim.py`: re-flies guided weapons with YSFlight's own rules (FsWeapon::Move/HitObject).
    The replay stores only launches (and KILLCREDIT / explosions); YSFlight's own replay re-flies
-   them the same way.
-6. `fates.py`: how every sortie ended, with evidence and likely causes (%); kill confidence.
+   them the same way. `refly_as_seen`: an air-to-air missile that missed its target is flown
+   again against the target as the shooter's own replay recorded it (rule below).
+6. `fates.py`: how every sortie ended, with evidence and likely causes (%); kill confidence;
+   per sortie a damage log (`damage`); for crashes the nearest aircraft / ground object.
 7. Writes the event JSON (entities with 20 Hz telemetry, weapons with re-flown paths, kills,
    explosions, ground objects, sources, `events` = text messages, `loadouts` = WPNCFG). An `-o`
    name ending in `.gz` is written gzip-compressed (level 5: ~7x smaller, a few seconds more);
@@ -43,16 +48,17 @@ The replays (`Raw_Data/`) and events (`events/`) are not in the repository (too 
    click), Build event -> `events/<first>_and_<n>_more.json.gz`.
 
 Viewer scripts: `node_3d.gd` (controller: clock, play/rewind/steps, loading on a thread,
-aircraft and their shadows, name tags, flight path vectors, camera, keys, view settings),
-`ui_layer.gd` (start
-menu, bars, side panel: search box, review filter, jump buttons, tabs Pilots / Kills / Deaths /
-Messages / Files / View, details box with the review buttons and note), `review.gd` (the review
+aircraft and their shadows, name tags with health, flight path vectors, camera and the top view,
+keys, view settings, better lighting), `ui_layer.gd` (start menu with the folder pick, bars, side
+panel: search box, review filter, jump buttons, tabs Pilots / Kills / Deaths / Ground / Chat /
+Files / View, details box with the review buttons and note), `review.gd` (the review
 marks and their file), `combat_layer.gd` (trails, weapon models, tethers, markers, fireballs,
 kill feed), `weapon_models.gd` (which model each weapon uses), `ribbon_layer.gd` (energy ribbons
 + black smoke of aircraft going down; shader-windowed, built once on the loader thread),
 `ground_layer.gd` (ground objects: game models as MultiMesh per type, blocks if none; hidden
-from `destroyed_t`), `map_layer.gd` (the map; `ground_at(x, z)` = height and slope of the ground
-under a point, for the shadows), `dnm_model.gd` (YSFlight `.dnm`/`.srf` models, cached in
+from `destroyed_t`; SAM / AAA range rings), `map_layer.gd` (the map, and its relief-shaded copy
+for better lighting; `ground_at(x, z)` = height and slope of the ground under a point, for the
+shadows), `dnm_model.gd` (YSFlight `.dnm`/`.srf` models, cached in
 `user://model_cache`, parsed on WorkerThreadPool), `event_builder.gd`, `fmt.gd`, `ys_air.gd`,
 `paths.gd` (where the data folders are). Settings (last event, panel, `view_*`) live in
 `user://settings.cfg`: the user's own; tests must not write it.
@@ -124,6 +130,40 @@ under a point, for the shadows), `dnm_model.gd` (YSFlight `.dnm`/`.srf` models, 
   map's layers (render_priority -1, with depth writes): drawn opaque, OpenGL let the big flat sea
   shapes paint over it. View tab switch "Aircraft shadows". YSFlight also puts shadows on
   carrier decks (not done here).
+- Deeper missile check (user request): an air-to-air missile whose re-flight misses its target is
+  flown again against the target as the shooter's own replay recorded it (that game shows others
+  `delay` late: the raw track, not delay-corrected, and the target's flares shifted by the delay),
+  when the missile comes from the shooter's own replay and the target isn't that replay's
+  recorder. A hit there gives `w["as_seen"]` and, for a kill within 2 s + delay,
+  `k["reconstructed_as_seen"]`; the build log says "reproduced N of M (K only as the shooter's
+  game saw them)". Fates give it P_MISSILE_HIT_SEEN (4 points).
+- Damage log (user request; `e["damage"]`): every health drop before the aircraft went down;
+  drops under 1 s apart of one kind (over-G or not) are one entry; the drop into tumbling is its
+  own entry ("went down"). What was near: re-flown weapons that hit it or passed within 60 m
+  (also as the shooter saw them), explosions within 100 m (not an unnamed one after a fatal drop:
+  its own crash), gun rounds / rockets within 40 m, over-G (>= 11 G), another aircraft within
+  30 m, the ground within 15 m. Health on the name tags: "35/40 health" (the most the track
+  shows), "going down" in states 4/5 (the game then sets health to 1).
+- Crash finder (user: without cluttering the UI): only evidence lines in the details of crashed /
+  collision / unclear endings: the nearest other aircraft (within 20 km, closing speed) and the
+  nearest standing ground object (within 5 km).
+- Ground tab: per team and type "x of y destroyed" (every solid object; clouds left out); under a
+  type only the objects destroyed, damaged or credited; "#n" = the object's number among those of
+  its type (fates.py names them the same way). Click: 5 s before, the free camera looks at it.
+- Range rings (user: toggleable; off at first): SAMRANGE solid, GUNRANGE dashed, team colour,
+  flat at the object + 3 m, drawn through everything at a fixed pixel width (a band mesh + shader,
+  two MultiMeshes), only while the object stands.
+- Top view (T, user request "snap to top-down"): orthographic, north up, camera 60 km up; wheel
+  zooms (0.3 - 120 km), WASD / right-drag pans, following an aircraft keeps it centred; aircraft
+  drawn at least 18 px long; vectors flat strips; clicks pick by screen distance.
+- Better lighting (user: can be turned off; on at first): the terrain again with colours scaled
+  by new / old light per point (sun 30 degrees up from the south-south-west, ambient .37 +
+  diffuse .9: flat ground as bright as YSFlight's 82 %); models roughness .35, lit from that sun,
+  casting self-shadows (600 m) that only models receive (the map is unlit), SSAO. Off: YSFlight's
+  daylight, matt models, no shadows or SSAO (also lighter for the graphics card).
+- Whole event from a folder: the .yfs files there (and one folder down) grouped by a date in the
+  name (20260718, 2026-07-18 ...), else the day saved, and by map; newest first; the pipeline's
+  match check still leaves out a replay of another match.
 - Paths: every data file goes through `paths.gd` (`Paths.of("aircraft")` ...): the project
   folder from Godot, the .exe's folder when exported (an exported `res://` is inside the .exe).
 - RvB rules from the user: over-G = a death (-100), no credit; RvB servers damage aircraft above
@@ -138,7 +178,7 @@ under a point, for the shadows), `dnm_model.gd` (YSFlight `.dnm`/`.srf` models, 
 - Privacy: the scoring spreadsheet (`C:\rvb\scoring` on the user's PC) is private; don't copy it
   anywhere. Keep this repository private (replays hold player data; game files are third-party).
 
-## Windows package (.exe)
+## Windows package (.exe) and releases
 
 `python tools/package.py [--python-zip <embeddable Python .zip or URL>]` (needs Godot 4.7.2 and
 its export templates; preset "Windows Desktop" in `export_presets.cfg`: pck embedded, no rcedit,
@@ -151,6 +191,12 @@ its export templates; preset "Windows Desktop" in `export_presets.cfg`: pck embe
 from the run's Artifacts (kept 30 days). The zip (~50 MB) is over the 30 MB file limit of the
 chat, and the cloud session's network policy blocks www.python.org, so Actions is the way to
 hand it over. Not run on Windows (no Windows here); the same export for Linux was run and checked.
+Releases (permanent downloads): `.github/workflows/release.yml` runs when the `VERSION` file
+changes (on main or a claude/ branch; by hand once it is on main): it builds the package with
+`--version` (version.txt in it, shown in the start menu; zip `YSFlight-Replay-Viewer-<v>-win64.zip`)
+and publishes the GitHub Release <v> with `docs/release_notes/<v>.md`; the same version again
+replaces the zip. The package's README.txt is the scorers' one-page how-to. The repository is
+private: other scorers need to be collaborators to download, or the user shares the zip.
 
 ## Testing
 
@@ -164,14 +210,18 @@ hand it over. Not run on Windows (no Windows here); the same export for Linux wa
   is another match); expected: 210 sorties, 218 kills, 91 of 119 missile kills reproduced.
 - Measure, don't guess: e.g. line widths were measured from screenshot pixels.
 - Cloud sessions (no replays): `tools/make_test_replay.py OUT.yfs [SECOND.yfs]` writes a
-  made-up 9-minute Luavi fight (7 sorties: 2 missile kills, an AGM kill, a crash, a leave under
-  fire, an unconfirmed credit, bombs, rockets, guns, flares, a fuel tank, chat, loadouts, a SAM
-  that keeps firing after Tester's replay shows it destroyed with a kill credit) and optionally
-  the same fight as Bandit2's replay (clock 37.25 s later, 0.3 s lag; there the SAM stands).
-  Built together -> 7 sorties, 3 kills, 3 of 3 reproduced, 1 ground object destroyed (the tank,
-  2:05), 1 credit on one still there (the SAM). `tools/test_viewer.gd` (headless,
-  TEST_EVENT=...) checks models, trails, markers, ribbons, lists, jumps, the review file,
-  ground objects and shadows; `tools/test_shots.gd` takes screenshots under `xvfb-run`. The
+  made-up 9-minute Luavi fight (7 sorties: 3 missile kills, an AGM kill, a crash, a leave under
+  fire at 7:01, an unconfirmed credit, bombs, rockets, guns, flares, a fuel tank, chat, loadouts,
+  a SAM that keeps firing after Tester's replay shows it destroyed with a kill credit, Bandit3's
+  gun run on Tester (40 -> 35 health), Wingman's 11.8 G pull (3 health), Striker killed at 4:35
+  by Bandit2's AIM-9 that hits only as Bandit2's game (0.3 s lag) saw it) and optionally the same
+  fight as Bandit2's replay (clock 37.25 s later, 0.3 s lag; there the SAM stands). Built
+  together -> 7 sorties, 4 kills, 4 of 4 reproduced (1 only as the shooter's game saw it), 1
+  ground object destroyed (the tank, 2:05), 1 credit on one still there (the SAM); tester.yfs
+  alone -> 3 of 4. `tools/test_viewer.gd` (headless, TEST_EVENT=...) checks models, trails,
+  markers, ribbons, lists, jumps, the review file, ground objects, shadows, the Ground tab,
+  health tags, damage log, crash finder, rings, top view, lighting and the folder pick;
+  `tools/test_shots.gd` takes screenshots under `xvfb-run`. The
   user's renderer (Forward+) runs here on lavapipe: `apt-get install mesa-vulkan-drivers`, then
   `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json xvfb-run -a -s "-screen 0 1920x1080x24"
   godot --path . --rendering-driver vulkan --rendering-method forward_plus --resolution
@@ -198,7 +248,8 @@ hand it over. Not run on Windows (no Windows here); the same export for Linux wa
   was painted over by the layer's big sea triangles at some camera distances (Forward+ fine);
   drawing it in the transparent pass after the layers fixed it. Unshaded ALBEDO is linear:
   0.05 shows as grey 63 in Forward+ but 7 in OpenGL.
-- The UI is ~1152 units wide at 1920x1080 (stretch canvas_items): the bottom bar is full.
+- The UI is ~1152 units wide at 1920x1080 (stretch canvas_items): the bottom bar is full; the
+  side panel's tab bar fits 7 short titles (with "Messages" the 7th went behind scroll arrows).
 - In `.srf`, `V` lines inside a face (`F` ... `E`) are point numbers, not points.
 - YSFlight has no over-G breakup in its own code (only blackout); RvB's G-limiter is a server rule.
 
@@ -210,17 +261,21 @@ clock); start menu with `.fld` choice; Luavi map 1:1 with terrain; game models f
 detonation/kill markers (time-limited), energy ribbons (own width), flight path vectors, name
 tags, black smoke for aircraft going down; fates with causes and likelihoods (Deaths tab, CHECK
 marks, details box), kill confidence; review queue (confirm / reject + notes, file next to the
-event); search, review filter, N / C jumps, loss ticks on the timeline; Messages tab; loadouts
+event); search, review filter, N / C jumps, loss ticks on the timeline; Chat tab; loadouts
 in the sortie details; compressed event files; the Windows package (built by GitHub Actions);
-ground objects destroyed by a rule across replays, and hidden from then on; aircraft shadows.
+ground objects destroyed by a rule across replays, and hidden from then on; aircraft shadows;
+Ground tab; health on name tags; damage log; crash finder; SAM / AAA range rings; top view (T);
+better lighting; whole event from a folder; missiles re-flown as the shooter's game saw them;
+v1.0 release workflow and the one-page how-to. Not yet measured on RvB 6 (no replays here): the
+new "reproduced" count (was 91 of 119), the ground-object numbers, the damage logs.
 
 Agreed next steps, in order:
-1. Deeper evidence: re-fly missiles against the target as the shooter's replay saw it (should
-   raise 91/119); gun checks in the shooter's world; "ghost" copies of an aircraft from each
-   replay and a switch to see a moment as one player's game saw it; lag spikes per replay.
-2. Cameras: top-down orthographic tactical map, kill review (frame shooter + victim, slow
-   motion, loop), flight data strip (G, speed, height, throttle), engagement / missile cams,
-   chase and cockpit views, declutter "only who's involved".
+1. Deeper evidence, the rest: gun checks in the shooter's world; "ghost" copies of an aircraft
+   from each replay and a switch to see a moment as one player's game saw it; lag spikes per
+   replay.
+2. Cameras: kill review (frame shooter + victim, slow motion, loop), flight data strip (G, speed,
+   height, throttle), engagement / missile cams, chase and cockpit views, declutter "only who's
+   involved". (The top view is done.)
 3. Later: server-replay master (May 2027).
 
 ## From the first chat (2026-09-23/24)
@@ -260,3 +315,13 @@ Agreed next steps, in order:
   and aircraft need YSFlight-style shadows for depth. Open question put to them: do RvB ground
   objects ever respawn? (the rule assumes not). RvB 6 kill counts may drop when rebuilt: false
   ground kills become unconfirmed credits.
+
+## From the third chat (cloud, 2026-09-24)
+
+- The user answered the proposals: Ground tab yes; damage log "important", plus a simple health
+  tally "9/10 health" next to the name; bookmarks no; range circles yes, toggleable; batch
+  selection of all replays of one event yes; crash finder yes "but it should not impede on other
+  things, UI may start to get cluttered"; v1 permanent release: go ahead. Also: snap to a
+  top-down map view; deeper missile checks yes; settings for improved shading / lighting that
+  can be turned off. They asked for the .exe to be repacked for testing after each batch.
+- Still unanswered: do RvB ground objects ever respawn? (the ground rule assumes not).

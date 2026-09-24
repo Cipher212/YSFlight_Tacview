@@ -9,6 +9,9 @@ extends Node3D
 # and can be hidden on their own.
 # A type without a model keeps a placeholder block the size of its box (gamedata.py), in its
 # team's colour.
+# Range rings (View tab, off at first): a flat ring round each SAM site at its SAMRANGE (solid)
+# and each gun at its GUNRANGE (dashed), in the team's colour, while the object stands. They are
+# drawn through everything, a fixed width on screen (RING_SHADER), two draw calls in all.
 
 const Main = preload("res://node_3d.gd")
 const Paths = preload("res://paths.gd")
@@ -16,9 +19,35 @@ const PACKS = ["gamefiles", "YSFLIGHT-master/runtime/ground"]
 const NEUTRAL = Color(0.62, 0.6, 0.52)
 const CLOUD = Color(1.0, 1.0, 1.0, 0.07)
 const GONE = Transform3D(Basis(Vector3.ZERO, Vector3.ZERO, Vector3.ZERO), Vector3.ZERO)   # an instance not drawn
+const RING_BAND = 0.05       # the ring mesh spans 1 +- this (of the radius): room for the line
+const RING_LIFT = 3.0        # metres above the object's base
+const RING_ALPHA = 0.75
+const RING_SHADER = """
+shader_type spatial;
+render_mode unshaded, cull_disabled, depth_test_disabled, depth_draw_never, blend_mix;
+uniform float dashes = 0.0;       // 0: solid; else the number of dashes round the ring
+uniform float width_px = 1.6;
+varying vec2 local;
+varying vec4 tint;
+void vertex() {
+	local = VERTEX.xz;
+	tint = COLOR;
+}
+void fragment() {
+	float r = length(local);
+	float px = max(fwidth(r), 1e-6);          // ring units per pixel
+	float a = 1.0 - smoothstep(0.5 * width_px * px, (0.5 * width_px + 1.0) * px, abs(r - 1.0));
+	if (dashes > 0.0) {
+		a *= step(fract(atan(local.y, local.x) / 6.2831853 * dashes), 0.55);
+	}
+	ALBEDO = tint.rgb;
+	ALPHA = a * tint.a;
+}
+"""
 
-var items := []           # {"mm", "slot", "color", "model", "box", "t_dead", "dead", "times", "poses"}
+var items := []           # {"mm", "slot", "color", "model", "box", "t_dead", "dead", "times", "poses", "rings"}
 var cloud_nodes := []
+var ring_nodes := []      # the two ring MultiMeshInstance3Ds (missiles, guns)
 
 # --- which model belongs to which object ---
 
@@ -82,6 +111,7 @@ func setup(grounds: Array, meshes: Dictionary, paths: Dictionary) -> void:
 	box.size = Vector3.ONE
 	var groups := {}          # model path, "box" or "cloud box" -> {"mm", "count"}
 	var todo := []
+	var ring_counts := [0, 0]
 	for g in grounds:
 		var samples: Array = g.get("samples", [])
 		if samples.is_empty():
@@ -122,16 +152,32 @@ func setup(grounds: Array, meshes: Dictionary, paths: Dictionary) -> void:
 				poses.append(Transform3D(Main.ys_basis(s), Main.ys_position(s)))
 		item["times"] = times
 		item["poses"] = poses
+		item["rings"] = []           # [[style, slot, radius]]
+		for style in [0, 1]:
+			var reach := float(info.get("sam_range" if style == 0 else "gun_range", 0.0))
+			if reach > 0.0:
+				item["rings"].append([style, ring_counts[style], reach])
+				ring_counts[style] += 1
+		item["ring_color"] = Color(_team_color(int(g.get("iff", 0))), RING_ALPHA)
 		todo.append(item)
 	for key in groups:
 		groups[key]["mm"].instance_count = groups[key]["count"]
+	var rings := _ring_multimeshes(ring_counts)
 	for item in todo:
 		_place(item, item["poses"][0])
 		item["mm"].set_instance_color(item["slot"], item["color"])
+		for r in item["rings"]:
+			r[0] = rings[r[0]]
+			r[0].set_instance_color(r[1], item["ring_color"])
+		_place_rings(item, item["poses"][0])
 		items.append(item)
 
 func show_clouds(on: bool) -> void:
 	for n in cloud_nodes:
+		n.visible = on
+
+func show_ranges(on: bool) -> void:
+	for n in ring_nodes:
 		n.visible = on
 
 func update(t: float) -> void:
@@ -142,8 +188,11 @@ func update(t: float) -> void:
 			item["dead"] = dead
 			if dead:
 				item["mm"].set_instance_transform(item["slot"], GONE)
+				for r in item["rings"]:
+					r[0].set_instance_transform(r[1], GONE)
 			elif times.size() <= 1:
 				_place(item, item["poses"][0])
+				_place_rings(item, item["poses"][0])
 		if dead:
 			continue
 		if times.size() > 1:                  # a mover (ships, vehicles): between its samples
@@ -153,6 +202,7 @@ func update(t: float) -> void:
 				var w := clampf((t - times[k]) / (times[k + 1] - times[k]), 0.0, 1.0)
 				a = a.interpolate_with(item["poses"][k + 1], w)
 			_place(item, a)
+			_place_rings(item, a)
 
 # The object's box in its own frame: YSFlight's model box (x right, y up, z forward) turned into
 # the viewer's (z flips); a cube of the hit radius if the model is unknown.
@@ -170,6 +220,53 @@ func _place(item: Dictionary, pose: Transform3D) -> void:
 	var b: AABB = item["box"]
 	var t := Transform3D(pose.basis * Basis.from_scale(b.size), pose.origin + pose.basis * b.get_center())
 	item["mm"].set_instance_transform(item["slot"], t)
+
+# An object's range rings: flat, centred on it, whatever way it faces.
+func _place_rings(item: Dictionary, pose: Transform3D) -> void:
+	for r in item["rings"]:
+		var reach: float = r[2]
+		r[0].set_instance_transform(r[1], Transform3D(Basis.from_scale(Vector3(reach, 1.0, reach)),
+			pose.origin + Vector3(0.0, RING_LIFT, 0.0)))
+
+# The two ring MultiMeshes (0: missile reach, solid; 1: gun reach, dashed), hidden at first.
+func _ring_multimeshes(counts: Array) -> Array:
+	var mesh := _ring_mesh()
+	var shader := Shader.new()
+	shader.code = RING_SHADER
+	var out := []
+	for style in [0, 1]:
+		var mat := ShaderMaterial.new()
+		mat.shader = shader
+		mat.set_shader_parameter("dashes", 0.0 if style == 0 else 72.0)
+		var mm := _multimesh(mesh, mat)
+		mm.instance_count = counts[style]
+		var node: Node = get_child(get_child_count() - 1)
+		node.extra_cull_margin = 1000.0
+		node.visible = false
+		ring_nodes.append(node)
+		out.append(mm)
+	return out
+
+# A flat band round the unit circle (y up); the shader draws the line in it.
+static func _ring_mesh() -> ArrayMesh:
+	var verts := PackedVector3Array()
+	var steps := 160
+	for k in steps:
+		var a0 := TAU * k / steps
+		var a1 := TAU * (k + 1) / steps
+		var d0 := Vector3(cos(a0), 0.0, sin(a0))
+		var d1 := Vector3(cos(a1), 0.0, sin(a1))
+		var i0 := d0 * (1.0 - RING_BAND)
+		var o0 := d0 * (1.0 + RING_BAND)
+		var i1 := d1 * (1.0 - RING_BAND)
+		var o1 := d1 * (1.0 + RING_BAND)
+		verts.append_array(PackedVector3Array([i0, o0, o1, i0, o1, i1]))
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
 
 static func _team_color(iff: int) -> Color:
 	return Main.iff_color(iff) if iff == 1 or iff == 4 else NEUTRAL

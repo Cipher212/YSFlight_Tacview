@@ -1,6 +1,7 @@
 extends SceneTree
 
 const Fmt = preload("res://fmt.gd")
+const DnmModel = preload("res://dnm_model.gd")
 # Logic checks of the viewer against the made-up test event (tools/make_test_replay.py):
 #     TEST_EVENT=/abs/path/test.json.gz godot --headless --path . --script tools/test_viewer.gd
 # Deletes the event's review file first (KEEP_REVIEW=1: keeps it). Exit code 1 if a check fails.
@@ -94,7 +95,7 @@ func _init():
 	var msgs := 0
 	for it in ui.messages_tree.get_root().get_children():
 		msgs += 1
-	check(msgs == main.event_data["events"].size() and msgs >= 3, "Messages tab: %d messages" % msgs)
+	check(msgs == main.event_data["events"].size() and msgs >= 3, "Chat tab: %d messages" % msgs)
 	var tip := ""
 	for id in ui._pilot_items:
 		tip += ui._pilot_items[id].get_tooltip_text(0)
@@ -212,6 +213,126 @@ func _init():
 	main._on_view_changed("shadows", false)
 	check(get_nodes_in_group("aircraft_shadow").all(func(x): return not x.visible), "the View switch hides them")
 	main._on_view_changed("shadows", true)
+
+	print("Ground tab:")
+	var gt: Tree = ui.ground_tree
+	var lines := []
+	var t80_id := ""
+	for team_item in gt.get_root().get_children():
+		for type_item in team_item.get_children():
+			lines.append(type_item.get_text(0))
+			for it in type_item.get_children():
+				lines.append(it.get_text(0))
+				if it.get_text(0).contains("T-80U #1 destroyed"):
+					t80_id = str(it.get_metadata(0))
+	var all_text := "\n".join(lines)
+	check(all_text.contains("[GOP]T-80U   1 of 1 destroyed"), "type line: [GOP]T-80U 1 of 1 destroyed")
+	check(t80_id != "" and all_text.contains("T-80U #1 destroyed  by [BLUE]Striker (AGM-65)"),
+		"the tank: destroyed at 2:05 by [BLUE]Striker (AGM-65)")
+	check(all_text.contains("[GOP]SAM #1  still there: 1 unconfirmed credit") or not all_text.contains("[GOP]SAM #1"),
+		"the SAM: still there, with its unconfirmed credit")
+	if t80_id != "":
+		ui._ground_items[t80_id]
+		ui.tabs.current_tab = ui.tabs.get_tab_idx_from_control(gt)
+		for team_item in gt.get_root().get_children():
+			for type_item in team_item.get_children():
+				for it in type_item.get_children():
+					if str(it.get_metadata(0)) == t80_id:
+						it.select(0)
+		await process_frame
+		await process_frame
+		var gi: Dictionary = ui._ground_items[t80_id]
+		check(absf(main.replay_time - (gi["t"] - 5.0)) < 0.01 and main.tracked_id == "",
+			"clicking it: 5 s before, free camera (%.1f)" % main.replay_time)
+		check(ui.details.text.contains("How it was decided:") and ui.details.text.contains("Game data: strength"),
+			"its details: how it was decided, game data")
+
+	print("health and damage:")
+	main.seek(150.0)
+	await process_frame
+	await process_frame
+	var tester_id := ""
+	for id in main.event_data["entities"]:
+		if main.event_data["entities"][id]["player"] == "[BLUE]Tester":
+			tester_id = id
+	main._tag_clock = 1.0
+	await process_frame
+	await process_frame
+	check(main.aircraft_tags[tester_id].text.contains("40/40 health"), "Tester's tag at 2:30: 40/40 health")
+	main.seek(210.0)
+	main._tag_clock = 1.0
+	await process_frame
+	await process_frame
+	check(main.aircraft_tags[tester_id].text.contains("35/40 health"), "after Bandit3's gun hits: 35/40 health")
+	var tip_all := ""
+	for id in ui._pilot_items:
+		tip_all += ui._pilot_items[id].get_tooltip_text(0) + "\n"
+	check(tip_all.contains("Damage:") and tip_all.contains("round(s) from [RED]Bandit3"),
+		"damage log: the gun rounds from Bandit3")
+	check(tip_all.contains("pulling 11.8 G"), "damage log: Wingman's over-G")
+	check(tip_all.contains("Nearest ground object then:"), "crash finder: Bandit2's crash lists the nearest ground object")
+	var seen_kill := false
+	for id in ui._kill_order:
+		if ui._items[id]["details"].contains("as the shooter's game showed the victim"):
+			seen_kill = true
+	var two_files: bool = main.event_data.get("sources", []).filter(func(x): return x.get("included", false)).size() >= 2
+	check(seen_kill == two_files, "Striker's kill re-flown only as Bandit2's game saw it (%s)" %
+		("two replays" if two_files else "one replay: not possible"))
+
+	print("range rings:")
+	check(gl.ring_nodes.size() == 2 and gl.ring_nodes.all(func(x): return not x.visible), "two ring layers, hidden at first")
+	var n_rings := 0
+	for item in gl.items:
+		n_rings += item["rings"].size()
+	check(n_rings >= 2, "%d rings (the SAM's missiles, the tank's gun ...)" % n_rings)
+	main._on_view_changed("ranges", true)
+	check(gl.ring_nodes.all(func(x): return x.visible), "the View switch shows them")
+	main._on_view_changed("ranges", false)
+
+	print("top view:")
+	main.follow(tester_id)
+	main.set_top_view(true)
+	await process_frame
+	await process_frame
+	check(main.camera.projection == Camera3D.PROJECTION_ORTHOGONAL and main.camera.global_transform.basis.z.y > 0.99,
+		"T: straight down, no perspective")
+	var tp: Vector3 = main.active_aircraft[tester_id].position
+	check(absf(main.camera.position.x - tp.x) < 1.0 and absf(main.camera.position.z - tp.z) < 1.0,
+		"centred on the aircraft it follows")
+	var scale_now: float = main.aircraft_models[tester_id].basis.get_scale().x
+	check(scale_now > 1.5, "aircraft drawn bigger from above (x%.1f)" % scale_now)
+	main.tracked_id = ""
+	var screen: Vector2 = main.camera.unproject_position(main.active_aircraft[tester_id].global_position)
+	main._pick(screen + Vector2(3, 2))
+	check(main.tracked_id == tester_id, "clicking it in the top view follows it")
+	main.set_top_view(false)
+	await process_frame
+	check(main.camera.projection == Camera3D.PROJECTION_PERSPECTIVE, "T again: back to 3D")
+
+	print("better lighting:")
+	var terrain: Array = main.map_node._terrain
+	check(terrain.size() == 2 and terrain[1].visible and not terrain[0].visible, "on at first: the relief-shaded terrain")
+	main._on_view_changed("lighting", false)
+	check(terrain[0].visible and not terrain[1].visible and is_equal_approx(DnmModel._materials[0].roughness, 1.0),
+		"off: YSFlight's daylight, matt models")
+	main._on_view_changed("lighting", true)
+
+	print("a whole event from a folder:")
+	var dir := OS.get_user_data_dir().path_join("test_folder_pick")
+	DirAccess.make_dir_recursive_absolute(dir)
+	for f in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(dir.path_join(f))
+	var src := event.get_base_dir()
+	var yfs := Array(DirAccess.get_files_at(src)).filter(func(f): return f.ends_with(".yfs"))
+	for k in yfs.size():
+		DirAccess.copy_absolute(src.path_join(yfs[k]), dir.path_join("RvB_20260718_%d.yfs" % k))
+	DirAccess.copy_absolute(src.path_join(yfs[0]), dir.path_join("practice_2026-07-11.yfs"))
+	ui._on_folder_picked(dir)
+	check(ui.menu_groups.item_count == 2 and ui.menu_replays.size() == yfs.size(),
+		"2 events found; the newest (2026-07-18, %d replays) chosen: %s" % [yfs.size(), ui.menu_groups.get_item_text(0)])
+	for f in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(dir.path_join(f))
+	DirAccess.remove_absolute(dir)
 
 	print("review file after reload:")
 	var text := FileAccess.get_file_as_string(review_file)

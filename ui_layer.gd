@@ -27,8 +27,10 @@ signal speed_changed(speed: float)
 signal aircraft_chosen(id: String)
 signal kill_chosen(kill: Dictionary)
 signal death_chosen(id: String, t: float)
+signal ground_chosen(index: int, t: float)
 signal layout_changed
 signal panel_toggled(shown: bool)
+signal top_view_toggled
 
 const Main = preload("res://node_3d.gd")
 const Fmt = preload("res://fmt.gd")
@@ -63,6 +65,8 @@ const VIEW_SWITCHES = [
 	["markers", "Markers: a ball where each weapon ended (bright = hit, dark = missed) and a cross at each kill"],
 	["ground", "Ground objects"],
 	["clouds", "Clouds (see-through blocks)"],
+	["ranges", "SAM and AAA ranges: a ring round each one still standing, solid = missiles, dashed = guns"],
+	["lighting", "Better lighting: hills shaded by a lower sun, shinier aircraft (off: YSFlight's flat daylight)"],
 	["shadows", "Aircraft shadows on the ground (straight below, as in YSFlight)"],
 	["blocky", "Blocky placeholder aircraft instead of the game models (faster)"]]
 const TRAIL_HELP = "Weapon trails, in the shooter's team colour: solid line = air-to-air missile, " + \
@@ -81,6 +85,7 @@ var play_button: Button
 var play_state: Label
 var notice: Label
 var panel_button: Button
+var top_button: Button
 var speed_menu: OptionButton
 var speed_edit: LineEdit
 var jump_edit: LineEdit
@@ -92,6 +97,7 @@ var pilots: Tree
 var kills_tree: Tree
 var deaths_tree: Tree
 var messages_tree: Tree
+var ground_tree: Tree
 var details: RichTextLabel
 var review_box: VBoxContainer
 var confirm_button: Button
@@ -112,6 +118,9 @@ var menu_continue: Button
 var menu_replays_label: Label
 var menu_field: OptionButton
 var menu_note: Label
+var menu_groups: OptionButton   # the events found in a folder of replays (Choose folder...)
+var folder_dialog: FileDialog
+var _folder_groups := []         # [{"label", "files"}], newest first
 var menu_last := ""
 var menu_replays := PackedStringArray()
 var fields = []           # [field name, .fld path] from the scenery lists (and any browsed to)
@@ -133,6 +142,8 @@ var _check_order := []    # ids of the kills and deaths marked CHECK, by time
 var _death_order := []    # ids of the endings that are losses, by time (timeline ticks)
 var _tree_items := {}     # item id -> its TreeItem in the lists as filled now
 var _pilot_items := {}    # aircraft id -> its sortie's TreeItem in the Pilots list
+var _ground_items := {}   # "g<index>" -> {"index", "t", "team", "type", "line", "details", "check"}
+var _ground_totals := {}  # team -> type -> [objects, destroyed] (every solid object)
 var _selected := ""       # the item picked last
 var _selecting := false   # an item is being selected from code (its signal is ignored)
 var _note_dirty := false
@@ -197,6 +208,7 @@ func show_event(data: Dictionary, t_min: float, t_max: float, path: String) -> v
 	details.visible = false
 	review_box.visible = false
 	_build_items(data)
+	_build_ground_items(data)
 	var abouts := {}
 	for id in _items:
 		abouts[id] = _items[id]["about"]
@@ -299,6 +311,19 @@ func fate_text(fate: Dictionary) -> String:
 
 # The full story of an ending, for tooltips: every cause with its reasons, what the replays
 # show, and (for a leave) what was threatening the aircraft.
+# A sortie's damage log (fates.damage_log): every time it lost health and what was near it then.
+# Older event files have none.
+func damage_text(e: Dictionary) -> String:
+	if not e.has("damage"):
+		return ""
+	var log: Array = e["damage"]
+	if log.is_empty():
+		return "\nDamage: none taken."
+	var text := "\nDamage:"
+	for d in log:
+		text += "\n  " + str(d["text"])
+	return text
+
 func fate_details(fate: Dictionary) -> String:
 	var lines := []
 	for c in fate.get("causes", []):
@@ -326,6 +351,8 @@ func _build_top(root: Control) -> void:
 	_button(row, "Menu", func(): show_start_menu(menu_last))
 	_button(row, "Open event...", _ask_event)
 	panel_button = _button(row, "Hide panel", toggle_panel)
+	top_button = _tip(_button(row, "Top view (T)", top_view_toggled.emit),
+		"The map from straight above: WASD or right-drag to move, mouse wheel to zoom, T to go back") as Button
 	row.add_child(VSeparator.new())
 	_button(row, "Restart", restart.emit)
 	row.add_child(_label("Jump to:"))
@@ -457,7 +484,8 @@ func _build_side(root: Control) -> void:
 	pilots = _tree(tabs, "Pilots", _on_pilot_item)
 	kills_tree = _tree(tabs, "Kills", _on_list_item.bind("Kills"))
 	deaths_tree = _tree(tabs, "Deaths", _on_list_item.bind("Deaths"))
-	messages_tree = _tree(tabs, "Messages", _on_message_item)
+	ground_tree = _tree(tabs, "Ground", _on_ground_item)
+	messages_tree = _tree(tabs, "Chat", _on_message_item)       # the replays' text messages
 	files_text = RichTextLabel.new()
 	files_text.name = "Files"
 	files_text.bbcode_enabled = true
@@ -556,7 +584,9 @@ func _build_start_menu(root: Control) -> void:
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 10)
 	box.add_child(v)
-	var title := _label("YSFlight replay viewer")
+	var version := FileAccess.get_file_as_string(Paths.of("version.txt")).strip_edges() \
+		if FileAccess.file_exists(Paths.of("version.txt")) else ""
+	var title := _label("YSFlight replay viewer" + ("  " + version if version != "" else ""))
 	title.add_theme_font_size_override("font_size", 24)
 	v.add_child(title)
 	menu_continue = _button(v, "Continue", func(): open_event.emit(menu_last))
@@ -567,6 +597,14 @@ func _build_start_menu(root: Control) -> void:
 	v.add_child(r1)
 	r1.add_child(_label("1.  Replays (.yfs) of one event:"))
 	_button(r1, "Choose files...", _ask_replays)
+	_tip(_button(r1, "Whole event from a folder...", func(): folder_dialog.popup_centered_ratio(0.7)),
+		"Pick the folder with the replays: they are sorted into events by the date in their names (else the day they were saved) and map")
+	menu_groups = OptionButton.new()
+	menu_groups.focus_mode = Control.FOCUS_NONE
+	menu_groups.fit_to_longest_item = false
+	menu_groups.visible = false
+	menu_groups.item_selected.connect(func(i): _use_replays(PackedStringArray(_folder_groups[i]["files"])))
+	v.add_child(menu_groups)
 	menu_replays_label = _label("none chosen")
 	menu_replays_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(menu_replays_label)
@@ -631,6 +669,14 @@ func _build_dialogs() -> void:
 	event_dialog.current_dir = Paths.of("events")
 	event_dialog.file_selected.connect(open_event.emit)
 	add_child(event_dialog)
+	folder_dialog = FileDialog.new()
+	folder_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
+	folder_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	folder_dialog.use_native_dialog = true
+	folder_dialog.title = "The folder with the event's replays"
+	folder_dialog.current_dir = Paths.of("Raw_Data")
+	folder_dialog.dir_selected.connect(_on_folder_picked)
+	add_child(folder_dialog)
 	fld_dialog = FileDialog.new()
 	fld_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 	fld_dialog.access = FileDialog.ACCESS_FILESYSTEM
@@ -711,7 +757,7 @@ func _build_items(data: Dictionary) -> void:
 		if fate.is_empty() or fate.get("kind", "") == "none":
 			continue
 		var t := float(fate.get("t", 0.0))
-		var text := fate_details(fate)
+		var text := fate_details(fate) + damage_text(e)
 		for lo in loadouts.get(str(eid), []):
 			text += "\nLoadout at %s: %s" % [Fmt.clock(lo["t"]), Fmt.loadout(lo["cfg"])]
 		_items["d" + str(eid)] = {"kind": "death", "t": t, "entity": str(eid),
@@ -738,7 +784,9 @@ func _kill_details(k: Dictionary) -> String:
 	for c in k.get("other_claims", []):
 		tip += "\nAlso claimed: %s  %s  (%d games)" % [_ref_name(c.get("killer_ref")),
 			Fmt.weapon(c["name"]), c.get("recorded_in", []).size()]
-	if k.has("reconstructed"):
+	if k.get("reconstructed_as_seen", false):
+		tip += "\nMissile path re-flown to the kill as the shooter's game showed the victim (it lagged behind)"
+	elif k.has("reconstructed"):
 		tip += "\nMissile path " + ("re-flown to the kill" if k["reconstructed"] else "could not be reproduced")
 	if k.has("evidence"):
 		tip += "\n\nHow sure (%d%%):" % roundi(k.get("confidence", 0.0) * 100.0)
@@ -799,6 +847,7 @@ func _refill() -> void:
 	_fill_pilots()
 	_fill_kills()
 	_fill_deaths()
+	_fill_ground()
 	_fill_messages()
 	_update_summary()
 	ticks.queue_redraw()
@@ -879,7 +928,7 @@ func _fill_pilots() -> void:
 				s_item.set_metadata(0, eid)
 				_pilot_items[eid] = s_item
 				_style_sortie(s_item, e)
-				var tip := fate_details(e.get("fate", {}))
+				var tip := fate_details(e.get("fate", {})) + damage_text(e)
 				var src = e.get("source", {})
 				if not src.is_empty():
 					tip += "\nTrack from %s%s" % [src.get("file", "?"),
@@ -955,6 +1004,157 @@ func _list_item(tree: Tree, parent: TreeItem, id: String) -> TreeItem:
 	_style(item, id)
 	_tree_items[id] = item
 	return item
+
+# The ground objects that were destroyed, damaged or credited as a kill: when, by whom, and how
+# the pipeline decided it was destroyed (event_merge.ground_fates). Clouds are left out.
+func _build_ground_items(data: Dictionary) -> void:
+	_ground_items.clear()
+	_ground_totals.clear()
+	var kills_on := {}        # ground index -> [kill]
+	var claims_on := {}       # ground index -> [unconfirmed credit]
+	for pair in [[data.get("kills", []), kills_on], [data.get("unconfirmed_kills", []), claims_on]]:
+		for k in pair[0]:
+			var v = k.get("victim_ref")
+			if v != null and v["kind"] == "ground":
+				var n := int(v["index"])
+				if not pair[1].has(n):
+					pair[1][n] = []
+				pair[1][n].append(k)
+	var numbers := {}         # type -> objects of that type so far ("#n")
+	for n in _grounds.size():
+		var g: Dictionary = _grounds[n]
+		var info = g.get("dat")
+		if info == null:
+			info = {}
+		if not info.get("solid", true):
+			continue              # clouds
+		var gtype := str(g["type"])
+		numbers[gtype] = numbers.get(gtype, 0) + 1
+		var label := "%s #%d" % [gtype, numbers[gtype]]
+		var team := int(g.get("iff", 0))
+		if team != 1 and team != 4:
+			team = 0
+		var samples: Array = g.get("samples", [])
+		var t_dead := -1.0
+		if g.has("destroyed_t"):
+			t_dead = -1.0 if g["destroyed_t"] == null else float(g["destroyed_t"])
+		else:                     # older events: when its own replay shows it destroyed
+			for sm in samples:
+				if int(sm.get("state", 0)) == 1:
+					t_dead = float(sm["t"])
+					break
+		if not _ground_totals.has(team):
+			_ground_totals[team] = {}
+		var tot: Array = _ground_totals[team].get(gtype, [0, 0])
+		_ground_totals[team][gtype] = [tot[0] + 1, tot[1] + int(t_dead >= 0.0)]
+		# strength over time (the samples are written when something changes)
+		var hp := []              # [t, strength] at each change
+		for sm in samples:
+			var st := int(sm.get("strength", -1))
+			if st >= 0 and (hp.is_empty() or hp[-1][1] != st):
+				hp.append([float(sm["t"]), st])
+		var damaged: bool = hp.size() > 1 and hp[-1][1] < hp[0][1]
+		var kills: Array = kills_on.get(n, [])
+		var claims: Array = claims_on.get(n, [])
+		if t_dead < 0.0 and kills.is_empty() and claims.is_empty() and not damaged:
+			continue              # untouched: only counted
+		var t := t_dead
+		var line := ""
+		if t_dead >= 0.0:
+			line = "%s (%d s)  %s destroyed" % [Fmt.clock(t_dead), int(t_dead), label]
+			if not kills.is_empty():
+				line += "  by %s (%s)" % [_ref_name(kills[0].get("killer_ref")), Fmt.weapon(kills[0]["name"])]
+		elif not claims.is_empty():
+			t = float(claims[0]["t"])
+			line = "%s  still there: %d unconfirmed credit%s" % [label, claims.size(), "" if claims.size() == 1 else "s"]
+		else:
+			t = float(hp[1][0]) if damaged else (float(kills[0]["t"]) if not kills.is_empty() else 0.0)
+			line = "%s  damaged: %d of %d strength left" % [label, hp[-1][1], hp[0][1]] if damaged \
+				else "%s  credited, not seen destroyed" % label
+		var text := "%s, %s" % [label, TEAM_NAMES[team]]
+		if t_dead >= 0.0:
+			text += "\nDestroyed at %s (%d s)." % [Fmt.clock(t_dead), int(t_dead)]
+		else:
+			text += "\nNot destroyed: still there when the recordings end."
+		for k in kills:
+			text += "\nKill credit: %s  %s  %s (Kills tab)" % [Fmt.clock(k["t"]), _ref_name(k.get("killer_ref")),
+				Fmt.weapon(k["name"])]
+		for k in claims:
+			text += "\nUnconfirmed credit: %s  %s  %s, recorded in %d game(s)" % [Fmt.clock(k["t"]),
+				_ref_name(k.get("killer_ref")), Fmt.weapon(k["name"]), k.get("recorded_in", []).size()]
+		if not g.get("destroyed_evidence", []).is_empty():
+			text += "\nHow it was decided:"
+			for ev in g["destroyed_evidence"]:
+				text += "\n  " + ev
+		if hp.size() > 1:
+			var steps := []
+			for h in hp:
+				steps.append("%d at %s" % [h[1], Fmt.clock(h[0])])
+			text += "\nStrength: " + ", ".join(steps)
+		var facts := []
+		if info.has("strength"):
+			facts.append("strength %d" % int(info["strength"]))
+		if float(info.get("sam_range", 0.0)) > 0.0:
+			facts.append("SAM range %s" % _km(info["sam_range"]))
+		if float(info.get("gun_range", 0.0)) > 0.0:
+			facts.append("gun range %s" % _km(info["gun_range"]))
+		if not facts.is_empty():
+			text += "\nGame data: " + ", ".join(facts)
+		_ground_items["g%d" % n] = {"index": n, "t": t, "team": team, "type": gtype, "line": line,
+			"details": text, "check": bool(g.get("destroyed_check", false)),
+			"color": Main.iff_color(team).lightened(0.45)}
+
+static func _km(metres) -> String:
+	var m := float(metres)
+	return "%.1f km" % (m / 1000.0) if m >= 1000.0 else "%d m" % int(m)
+
+# The Ground tab: every team's ground objects by type ("3 of 12 destroyed"), under each type the
+# objects that were destroyed, damaged or credited; click one to look at it then.
+func _fill_ground() -> void:
+	ground_tree.clear()
+	var root := ground_tree.create_item()
+	if _ground_totals.is_empty():
+		var none := ground_tree.create_item(root)
+		none.set_text(0, "No ground objects in this event.")
+		none.set_selectable(0, false)
+		return
+	var searching := search.text.strip_edges() != ""
+	for team in [1, 4, 0]:
+		if not _ground_totals.has(team):
+			continue
+		var types: Array = _ground_totals[team].keys()
+		types.sort()
+		var all := 0
+		var gone := 0
+		for gtype in types:
+			all += _ground_totals[team][gtype][0]
+			gone += _ground_totals[team][gtype][1]
+		var t_item: TreeItem = null
+		for gtype in types:
+			var ids := []
+			for id in _ground_items:
+				var it: Dictionary = _ground_items[id]
+				if it["team"] == team and it["type"] == gtype and _matches(it["line"] + "\n" + it["details"]):
+					ids.append(id)
+			if searching and ids.is_empty() and not _matches(gtype):
+				continue
+			if t_item == null:
+				t_item = ground_tree.create_item(root)
+				t_item.set_text(0, "%s  -  %d of %d destroyed" % [TEAM_NAMES[team], gone, all])
+				t_item.set_custom_color(0, Main.iff_color(team).lightened(0.35))
+				t_item.set_selectable(0, false)
+			var tot: Array = _ground_totals[team][gtype]
+			var type_item := ground_tree.create_item(t_item)
+			type_item.set_text(0, "%s   %d of %d destroyed" % [gtype, tot[1], tot[0]])
+			type_item.set_selectable(0, false)
+			ids.sort_custom(func(a, b): return _ground_items[a]["t"] < _ground_items[b]["t"])
+			for id in ids:
+				var it: Dictionary = _ground_items[id]
+				var item := ground_tree.create_item(type_item)
+				item.set_metadata(0, id)
+				item.set_text(0, ("CHECK  " if it["check"] else "") + it["line"])
+				item.set_custom_color(0, CHECK_COLOR if it["check"] else it["color"])
+				item.set_tooltip_text(0, it["details"])
 
 # The replays' text messages (server notices, chat) on the event clock; click one to go there.
 func _fill_messages() -> void:
@@ -1133,6 +1333,57 @@ func _ask_event() -> void:
 	event_dialog.popup_centered_ratio(0.7)
 
 func _on_replays_picked(paths: PackedStringArray) -> void:
+	menu_groups.visible = false
+	_use_replays(paths)
+
+# A folder of replays: its .yfs files (and those one folder down) sorted into events by the date
+# in their names (20260718, 2026-07-18 ...), else the day they were last saved, and by map. The
+# newest event is chosen; the list above the files offers the others. The pipeline still checks
+# that they are one match and leaves out any that isn't (Files tab).
+func _on_folder_picked(dir: String) -> void:
+	var paths := []
+	for d in [dir] + Array(DirAccess.get_directories_at(dir)).map(func(x): return dir.path_join(x)):
+		for f in DirAccess.get_files_at(d):
+			if f.to_lower().ends_with(".yfs"):
+				paths.append(d.path_join(f))
+	if paths.is_empty():
+		menu_note.text = "No replays (.yfs) in %s." % dir
+		return
+	var re := RegEx.new()
+	re.compile("(20\\d\\d)[-_. ]?(0[1-9]|1[0-2])[-_. ]?(0[1-9]|[12]\\d|3[01])")
+	var bias := int(Time.get_time_zone_from_system().get("bias", 0)) * 60
+	var groups := {}
+	for p in paths:
+		var m := re.search(p.get_file())
+		var day := ""
+		var how := "saved"
+		var when := FileAccess.get_modified_time(p)
+		if m != null:
+			day = "%s-%s-%s" % [m.get_string(1), m.get_string(2), m.get_string(3)]
+			how = "in the names"
+		else:
+			day = Time.get_date_string_from_unix_time(when + bias)
+		var field := _replay_field(p)
+		var key := "%s|%s" % [day, field]
+		if not groups.has(key):
+			groups[key] = {"day": day, "field": field, "how": how, "files": [], "newest": 0}
+		groups[key]["files"].append(p)
+		groups[key]["newest"] = maxi(groups[key]["newest"], when)
+	_folder_groups = groups.values()
+	_folder_groups.sort_custom(func(a, b): return a["day"] > b["day"] or (a["day"] == b["day"] and a["newest"] > b["newest"]))
+	menu_groups.clear()
+	for g in _folder_groups:
+		g["files"].sort()
+		g["label"] = "%s  (date %s)   %s   %d replay%s" % [g["day"], g["how"], g["field"] if g["field"] != "" else "unknown map",
+			g["files"].size(), "" if g["files"].size() == 1 else "s"]
+		menu_groups.add_item(g["label"])
+	menu_groups.visible = true
+	menu_groups.select(0)
+	_use_replays(PackedStringArray(_folder_groups[0]["files"]))
+	if _folder_groups.size() > 1:
+		menu_note.text += "\n%d events found in that folder: pick another from the list above." % _folder_groups.size()
+
+func _use_replays(paths: PackedStringArray) -> void:
 	menu_replays = paths
 	var names := []
 	for p in paths:
@@ -1223,6 +1474,9 @@ func _show_view_value(key: String, value: float) -> void:
 		if s[0] == key:
 			view_values[key].text = s[5] % value
 
+func show_top_view(on: bool) -> void:
+	top_button.text = "3D view (T)" if on else "Top view (T)"
+
 func toggle_panel() -> void:
 	set_panel_visible(not side_panel.visible)
 	panel_toggled.emit(side_panel.visible)
@@ -1277,6 +1531,17 @@ func _on_list_item(list: String) -> void:
 	var id = item.get_metadata(0)
 	if id != null and _items.has(str(id)):
 		_pick(str(id))
+
+func _on_ground_item() -> void:
+	var item := ground_tree.get_selected()
+	if item == null or item.get_metadata(0) == null or not _ground_items.has(str(item.get_metadata(0))):
+		return
+	var it: Dictionary = _ground_items[str(item.get_metadata(0))]
+	_commit_note()
+	_selected = ""
+	review_box.visible = false
+	_show_details(item.get_text(0), it["details"])
+	ground_chosen.emit(it["index"], it["t"])
 
 func _on_message_item() -> void:
 	var item := messages_tree.get_selected()

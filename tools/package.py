@@ -1,7 +1,7 @@
 """Builds the Windows package of the viewer: a folder, and a .zip of it, that runs without Godot:
 unzip it and double-click "YSFlight Replay Viewer.exe".
 
-    python tools/package.py [--godot GODOT] [--python-zip ZIP_OR_URL] [--out DIR]
+    python tools/package.py [--godot GODOT] [--python-zip ZIP_OR_URL] [--out DIR] [--version v1.0]
 
 Needs Godot 4.7.2 and its export templates (Godot: Editor > Manage Export Templates). With
 --python-zip (Windows' "embeddable" Python from python.org, e.g.
@@ -16,7 +16,9 @@ The package (--out, default build/):
     aircraft/ gamefiles/ maps/      game files and maps, as in this folder
     YSFLIGHT-master/runtime/        stock ground objects, weapons and maps (ground, misc, scenery)
     events/ Raw_Data/               built events go to events/; replays can go in Raw_Data/
-    README.txt
+    README.txt                      how to use it, on one page
+    version.txt                     with --version (shown in the start menu)
+The zip is build/YSFlight-Replay-Viewer-win64.zip (with --version: ...-<version>-win64.zip).
 """
 import argparse
 import os
@@ -33,24 +35,57 @@ PIPELINE = ["replay_parser.py", "yfs_reader.py", "event_merge.py", "gamedata.py"
             "weapon_sim.py", "fates.py"]
 DATA = ["aircraft", "gamefiles", "maps", "YSFLIGHT-master/runtime/ground", "YSFLIGHT-master/runtime/misc",
         "YSFLIGHT-master/runtime/scenery"]
-README = """YSFlight replay viewer
-======================
+README = """YSFlight Replay Viewer - how to use it
+=================================
 
-Start: double-click "YSFlight Replay Viewer.exe".
+It merges the replays (.yfs) several players recorded of one RvB event into one timeline and
+shows it in 3D with the evidence for every kill and death. It gathers the angles; the scorers
+decide and fill in the scoring sheet by hand, with the viewer's times (seconds since the start).
 
-- Open an event someone built and shared (.json.gz or .json): Menu > Open a saved event.
-  Put shared events in the "events" folder here to find them quickly.
-- Build an event from replays (.yfs): Menu > New event from replays. %s
-- Review: in the side panel, pick a kill or death (or press C for the next one marked CHECK),
-  then Confirm / Reject and add a note. Your marks are saved next to the event file as
-  <event>.review.txt; the event file itself is never changed.
-- Keys: Space play/pause, J / K / L rewind / pause / fast, , and . one frame (Shift: 1 s),
-  Left / Right 10 s (Shift: 60 s), N / Shift+N next / previous kill, C / Shift+C next / previous
-  CHECK to review, Tab next aircraft, Esc free camera, P side panel. Click an aircraft to follow it,
-  right-drag to look around, mouse wheel to zoom.
+1. START
+   Double-click "YSFlight Replay Viewer.exe". If Windows says "Windows protected your PC",
+   click More info > Run anyway (the program isn't signed; that is normal for home-made tools).
+   Keep the folders next to the .exe (aircraft, gamefiles, maps, YSFLIGHT-master, python).
 
-Folders: aircraft, gamefiles, maps and YSFLIGHT-master hold the game files the viewer draws with.
-Keep them next to the .exe.
+2. GET THE EVENT
+   Best: one person builds the event and shares the event file (.json.gz) with the other
+   scorers, so everyone's times match. Put it in the "events" folder, then Menu > Open a saved
+   event. To build one: Menu > Whole event from a folder... and pick the folder with the
+   replays (or Choose files... and select them all), check the map, then Build event (about a
+   minute). %s
+
+3. WATCH
+   Bottom bar: play, rewind, fast forward, frame steps, jumps. The clock also shows seconds.
+   Marks above the time bar: kills (top) and losses (bottom; orange = worth a look).
+   Keys: Space play/pause, J / K / L rewind / pause / fast, , and . one frame (Shift: 1 s),
+   Left / Right 10 s (Shift: 60 s), N next kill, C next item still to review (Shift: back),
+   Tab next aircraft, Esc free camera, T top view (the map from above), P side panel.
+   Mouse: click an aircraft to follow it, right-drag to look around, wheel to zoom.
+   Name tags show pilot, health (9/10 health), aircraft, height and speed.
+
+4. SCORE
+   Side panel tabs: Pilots (every sortie), Kills (with how sure each one is, in %%), Deaths
+   (how each aircraft went down, with the likely causes; CHECK = worth a look), Ground (every
+   ground target: destroyed when and by whom), Chat (the replays' messages), Files, View.
+   Pick a kill or death: the replay goes a few seconds before it and the details box shows the
+   evidence (damage log, re-flown missiles, nearby aircraft for crashes). Then press Confirm or
+   Reject and type a note. Your marks are saved at once next to the event file
+   (<event>.review.txt); the event file itself never changes. Show: "To review" lists what is
+   left. Find: type a pilot's name.
+
+5. WHAT THE EVIDENCE MEANS
+   - Missiles are re-flown with YSFlight's own rules (the replays only store launches). "As the
+     shooter's game saw it": the hit happened in the shooter's game, which saw the target a bit
+     late (lag).
+   - Unconfirmed credit: a game gave a kill but the victim didn't go down then (or a ground
+     object kept firing).
+   - Damage log: every time an aircraft lost health and what was near it (missile, gun rounds,
+     over-G above about 11 G, another aircraft).
+   - The app never decides a score: kamikaze, specials and every final call are the scorers'.
+
+6. VIEW TAB
+   Sizes of aircraft, weapons, text and ribbons; how long trails and markers stay; switches for
+   shadows, SAM and AAA range rings, better lighting and more. Settings are remembered.
 """
 PYTHON_NOTE_BUNDLED = "The Python it needs is included (the python folder)."
 PYTHON_NOTE_PATH = ("This needs Python 3 installed (python.org; tick \"Add python.exe to PATH\"). "
@@ -62,6 +97,7 @@ def main():
     ap.add_argument("--godot", default=shutil.which("godot") or "godot", help="the Godot 4.7.2 program")
     ap.add_argument("--python-zip", default=None, help="Windows embeddable Python: a .zip file or its URL")
     ap.add_argument("--out", default=os.path.join(REPO, "build"))
+    ap.add_argument("--version", default=None, help="e.g. v1.0: shown in the start menu and in the zip's name")
     args = ap.parse_args()
 
     folder = os.path.join(args.out, NAME)
@@ -101,8 +137,11 @@ def main():
         bundled = True
     with open(os.path.join(folder, "README.txt"), "w", encoding="utf-8", newline="\r\n") as f:
         f.write(README % (PYTHON_NOTE_BUNDLED if bundled else PYTHON_NOTE_PATH))
+    if args.version:
+        with open(os.path.join(folder, "version.txt"), "w", encoding="utf-8", newline="\r\n") as f:
+            f.write(args.version + "\n")
 
-    archive = os.path.join(args.out, "YSFlight-Replay-Viewer-win64.zip")
+    archive = os.path.join(args.out, "YSFlight-Replay-Viewer-%swin64.zip" % (args.version + "-" if args.version else ""))
     print("zipping ...", flush=True)
     if os.path.exists(archive):
         os.remove(archive)

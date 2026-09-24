@@ -99,8 +99,13 @@ def build_event(paths, out_path, map_name, pack_dirs, fld_path=None):
     for a, b, f in pieces:
         requests[f]["intervals"].append((a - offsets[f], b - offsets[f]))
     keys = list(requests)
-    jobs = [(files[i]["path"], requests[i]["sorties"], requests[i]["sorties"], requests[i]["intervals"])
-            for i in keys]
+    jobs = []
+    for i in keys:
+        own = requests[i]["sorties"]
+        # also the targets of these pilots' air-to-air missiles, as this game saw them (the
+        # deeper missile checks: weapon_sim.refly_as_seen)
+        aimed = sorted({tg for o in own for tg in files[i].get("a2a_targets", {}).get(o, ())} - set(own))
+        jobs.append((files[i]["path"], own + aimed, own, requests[i]["intervals"]))
     with ProcessPoolExecutor(max_workers=max(1, min(workers, len(jobs)))) as ex:
         details = dict(zip(keys, ex.map(_pass2, jobs)))
 
@@ -140,7 +145,9 @@ def build_event(paths, out_path, map_name, pack_dirs, fld_path=None):
                 shift -= 0.0 if files[i]["aircraft"][int(owner[1:])]["own"] else delays[i]
             w["owner"] = remap(i, owner)
             w["t"] = round(w["t"] + shift, 3)
+            w["_file"], w["_owner_local"] = i, owner
             if w.get("target", -1) >= 0:
+                w["_target_local"] = w["target"]
                 tmap = ground_maps[i] if w["type"] in yfs_reader.AIR_TO_GROUND_GUIDED else air_maps[i]
                 w["target"] = tmap.get(w["target"], -1)
             weapons.append(w)
@@ -214,6 +221,12 @@ def build_event(paths, out_path, map_name, pack_dirs, fld_path=None):
 
     progress(70, "re-flying %d guided weapons" % sum(1 for w in weapons if w["type"] in weapon_sim.GUIDED))
     weapon_sim.simulate_all(match_data, aircraft_list, ground_list, ground_height)
+    seen = _as_seen_targets(weapons, aircraft_list, files, details, offsets, delays, t0)
+    progress(78, "re-flying %d missed missile(s) as the shooters' games saw them" % len(seen))
+    weapon_sim.refly_as_seen(match_data, aircraft_list, seen, ground_height)
+    for w in weapons:
+        for key in ("_file", "_owner_local", "_target_local"):
+            w.pop(key, None)
     link_missile_kills(match_data)
 
     # references for the viewer: aircraft by id (entities key), ground objects by index
@@ -254,6 +267,7 @@ def build_event(paths, out_path, map_name, pack_dirs, fld_path=None):
         json.dump(match_data, out_f, separators=(",", ":"))
 
     missile_kills = [k for k in kills if "reconstructed" in k]
+    as_seen = sum(1 for k in missile_kills if k.get("reconstructed_as_seen"))
     print("-" * 70)
     print("Event: %s  (map %s), %d file(s) used of %d" % (match_data["field"], map_name,
           len(offsets), len(files)))
@@ -274,8 +288,9 @@ def build_event(paths, out_path, map_name, pack_dirs, fld_path=None):
               sum(k["basis"] == "the shooter's own game" for k in kills),
               sum(k["basis"] == "most games" for k in kills),
               sum(1 for k in kills if k["other_claims"]), sum(1 for k in kills if not k["verified"])))
-    print("  unconfirmed credits (no matching death) %d; missile kills reproduced %d of %d" % (
-        len(unconfirmed), sum(k["reconstructed"] for k in missile_kills), len(missile_kills)))
+    print("  unconfirmed credits (no matching death) %d; missile kills reproduced %d of %d%s" % (
+        len(unconfirmed), sum(k["reconstructed"] for k in missile_kills) + as_seen, len(missile_kills),
+        " (%d of them only as the shooter's game saw them)" % as_seen if as_seen else ""))
     print("  ground objects destroyed %d (%d where the replays disagree); credits on ones still there %d" % (
         sum(g["destroyed_t"] is not None for g in ground_list),
         sum(g["destroyed_t"] is not None and g["destroyed_check"] for g in ground_list),
@@ -310,16 +325,60 @@ def load_map(match_data, scenery_dirs, fld_path=None):
     return fld_reader.GroundHeight(field.grids)
 
 
+def _as_seen_targets(weapons, aircraft_list, files, details, offsets, delays, t0):
+    """{weapon index: (Track, file name, delay)} for the deeper missile checks: each air-to-air
+    missile that missed its target in the re-flight, fired from the shooter's own replay, with the
+    target's track as that replay recorded it (other aircraft there run `delay` behind; not
+    corrected: that is what the shooter's game showed and flew the missile against). Only when
+    the target lost health, went down or vanished while the missile flew (or within 3 s after):
+    a miss that did nothing needs no second look."""
+    hurt = {}                     # aircraft index -> times it lost health, went down or ended
+    for a in aircraft_list:
+        tel = a["telemetry"]
+        hurt[a["index"]] = sorted([tel[k]["t"] for k in range(1, len(tel))
+                                   if tel[k]["ctrl"][9] < tel[k - 1]["ctrl"][9]]
+                                  + [t for t in (a["death_t"], a["gone_t"]) if t is not None])
+    out = {}
+    for n, w in enumerate(weapons):
+        end = w.get("end") or {}
+        if w["type"] not in weapon_sim.AIR_TO_AIR or w.get("target", -1) < 0 or "_target_local" not in w:
+            continue
+        if end.get("reason") == "hit" and end.get("aircraft_index") == w["target"]:
+            continue
+        times = hurt.get(w["target"], [])
+        k = bisect.bisect_left(times, w["t"])
+        if k >= len(times) or times[k] > end.get("t", w["t"] + 60.0) + 3.0:
+            continue
+        i, shooter, target = w["_file"], w["_owner_local"], w["_target_local"]
+        planes = files[i]["aircraft"]
+        if not (shooter.startswith("A") and shooter[1:].isdigit() and int(shooter[1:]) < len(planes)
+                and planes[int(shooter[1:])]["own"]) or target >= len(planes) or planes[target]["own"]:
+            continue              # not the shooter's own game, or the target's own game (no lag)
+        samples = details[i][0].get(target)
+        if not samples:
+            continue
+        shift = offsets[i] - t0
+        track = weapon_sim.Track([{"t": t + shift, "x": x, "y": y, "z": z, "yaw": h, "pitch": p, "roll": b,
+                                   "ctrl": ctrl} for t, x, y, z, h, p, b, g, ctrl in samples])
+        out[n] = (track, files[i]["file"], delays[i])
+    return out
+
+
 def link_missile_kills(match_data):
     """Missile kills get "reconstructed" (did a re-flown missile from the same shooter hit
-    that victim within 1.5 s of the recorded kill?) and, if so, "weapon_index" of it.
+    that victim within 1.5 s of the recorded kill?) and, if so, "weapon_index" of it; failing
+    that, "reconstructed_as_seen" (it hit the victim as the shooter's own game showed it:
+    weapon_sim.refly_as_seen; that game runs `delay` behind, so a little more time is allowed).
     KILLCREDIT is what YSFlight decided; the re-flown paths are a reconstruction."""
-    hits = {}
+    hits, seen_hits = {}, {}
     for i, w in enumerate(match_data["weapons"]):
         end = w.get("end")
         if end and end["reason"] == "hit":
             victim = ("A%d" % end["aircraft_index"]) if "aircraft_index" in end else ("G%d" % end["ground_index"])
             hits.setdefault((w["owner"], victim), []).append((end["t"], i))
+        seen = w.get("as_seen")
+        if seen and seen["reason"] == "hit" and "aircraft_index" in seen:
+            seen_hits.setdefault((w["owner"], "A%d" % seen["aircraft_index"]), []).append((seen["t"], i, seen["delay"]))
     for k in match_data["kills"]:
         if k["weapon"] not in (1, 2, 6, 10):     # AIM9, AGM65, AIM120, AIM9X
             continue
@@ -327,6 +386,12 @@ def link_missile_kills(match_data):
                 if abs(t - k["t"]) < 1.5]
         k["reconstructed"] = bool(near)
         if near:
+            k["weapon_index"] = min(near)[1]
+            continue
+        near = [(abs(t - k["t"]), i) for t, i, delay in seen_hits.get((k["killer"], k["victim"]), [])
+                if abs(t - k["t"]) < 2.0 + delay]
+        if near:
+            k["reconstructed_as_seen"] = True
             k["weapon_index"] = min(near)[1]
 
 

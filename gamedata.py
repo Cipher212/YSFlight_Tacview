@@ -177,16 +177,17 @@ def load_ground_data(pack_dirs):
                 if not m or m.group(1).strip().upper() in table:
                     continue
                 entry = {"file": os.path.relpath(path, base)}
+                # a key given twice: the game keeps the last one (the 2S6M's SAMRANGE 6000m, then 2000m)
                 for key, name in KEYS.items():
-                    v = re.search(r"^%s\s+(\S+)" % key, text, re.M)
+                    v = re.findall(r"^%s\s+(\S+)" % key, text, re.M)
                     if v:
-                        entry[name] = _length(v.group(1))
-                v = re.search(r"^STRENGTH\s+(\d+)", text, re.M)
+                        entry[name] = _length(v[-1])
+                v = re.findall(r"^STRENGTH\s+(\d+)", text, re.M)
                 if v:
-                    entry["strength"] = int(v.group(1))
-                v = re.search(r"^MSSLTYPE\s+(\S+)", text, re.M)
+                    entry["strength"] = int(v[-1])
+                v = re.findall(r"^MSSLTYPE\s+(\S+)", text, re.M)
                 if v:
-                    entry["missile"] = v.group(1)
+                    entry["missile"] = v[-1]
                 model = models.get(_key(path), {})
                 entry["box"] = model.get("box")
                 entry["solid"] = model.get("solid", True)

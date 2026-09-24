@@ -8,7 +8,9 @@ With SECOND.yfs it also writes [RED]Bandit2's replay of the same fight: its own 
 ahead), the others seen 0.3 s late, and a SAM that Tester's game shows destroyed (with a kill
 credit) but that stays alive and keeps firing in Bandit2's game: a false ground kill.
 
-Blue: [BLUE]Tester (F-16, the recorder), [BLUE]Wingman (F-15), [BLUE]Striker (A-10).
+Blue: [BLUE]Tester (F-16, the recorder; hit by Bandit3's gun), [BLUE]Wingman (F-15; loses health
+      pulling 11.8 G), [BLUE]Striker (A-10; killed by Bandit2's AIM-9, a hit only in Bandit2's
+      game, which sees Striker 0.3 s late: the re-flight against Striker's own track misses).
 Red:  [RED]Bandit1 (MiG-29, killed by an AIM-120, respawns, later leaves in flight near Tester),
       [RED]Bandit2 (Su-25, fires an AIM-9 that is flared, later flies into the island),
       [RED]Bandit3 (J-10, killed by an AIM-9).
@@ -60,6 +62,7 @@ class Sortie:
         self.death = None       # time it starts tumbling (killed / crashed)
         self.leave = leave      # disappears in flight at t1
         self.hit_at = []        # (time, health lost) before the death
+        self.g_at = []          # (from, to, G): hard pulls
 
     def samples(self):
         out = []
@@ -70,6 +73,9 @@ class Sortie:
             x, y, z = self.path(min(t, self.death if self.death else t))
             h, p, b = attitude(self.path, min(t, self.death if self.death else t), self.bank)
             state, gl = 0, self.g
+            for a, b, pull in self.g_at:
+                if a <= t <= b:
+                    gl = pull
             for when, lost in self.hit_at:
                 if abs(t - when) < 0.025:
                     health -= lost
@@ -91,8 +97,9 @@ class Sortie:
         return out
 
 
-def track_for_sim(s, t_until=None):
-    """Samples as weapon_sim.Track wants them (the intact track, as if it never died)."""
+def track_for_sim(s, t_until=None, late=0.0):
+    """Samples as weapon_sim.Track wants them (the intact track, as if it never died); late: as
+    a game that sees it that many seconds late shows it."""
     keep = s.death
     s.death = None
     t1 = s.t1
@@ -100,7 +107,7 @@ def track_for_sim(s, t_until=None):
         s.t1 = t_until
     smp = s.samples()
     s.death, s.t1 = keep, t1
-    return weapon_sim.Track([{"t": t, "x": x, "y": y, "z": z, "yaw": h, "pitch": p, "roll": b, "ctrl": c}
+    return weapon_sim.Track([{"t": t + late, "x": x, "y": y, "z": z, "yaw": h, "pitch": p, "roll": b, "ctrl": c}
                              for t, x, y, z, h, p, b, g, c in smp])
 
 
@@ -113,8 +120,24 @@ def main(out, second=None):
         Sortie(3, "MIG-29(RED/MULTIROLE)", "[RED]Bandit1", 4, 4, 0.0, END, circle(*red_c, 2500, 3100, 235, math.pi)),
         Sortie(4, "SU-25(RED/CAS)", "[RED]Bandit2", 4, 5, 0.0, END, circle(*red_c, 3000, 2500, 190, 2.5)),
         Sortie(5, "J-10(RED/MULTIROLE)", "[RED]Bandit3", 4, 6, 20.0, END, circle(*red_c, 2200, 3600, 250, 1.0, False)),
-        Sortie(6, "MIG-29(RED/MULTIROLE)", "[RED]Bandit1", 4, 7, 400.0, 480.0, circle(*red_c, 2500, 3100, 235, 0.3), leave=True),
+        Sortie(6, "MIG-29(RED/MULTIROLE)", "[RED]Bandit1", 4, 7, 400.0, 421.0, circle(*red_c, 2500, 3100, 235, 0.3), leave=True),
     ]
+    # Bandit3 leaves its circle for a gun run on Tester: 600 m behind it from 3:20 to 3:22
+    def gun_run(t, old=s[5].path, tester=s[0].path):
+        def behind(u):
+            a, b = tester(u - 0.05), tester(u + 0.05)
+            v = [(b[k] - a[k]) / 0.1 for k in range(3)]
+            speed = math.sqrt(sum(c * c for c in v))
+            p = tester(u)
+            return tuple(p[k] - 600.0 * v[k] / speed for k in range(3))
+        if t < 190.0 or t > 208.0:
+            return old(t)
+        if t < 200.0:
+            return line(old(190.0), behind(200.0), 190.0, 200.0)(t)
+        if t <= 202.0:
+            return behind(t)
+        return line(behind(202.0), old(208.0), 202.0, 208.0)(t)
+    s[5].path = gun_run
     # Bandit2 flies into the island (x 22000..25000, z 15000) at the end of a dive
     dive_from = s[4].path(280.0)
     target = (24000.0, G(24000.0, 15200.0) - 30.0, 15200.0)
@@ -217,10 +240,40 @@ def main(out, second=None):
     kills.append((1, "A1", "A5", t_k + 0.1, s[5].path(t_k)))
     booms.append((t_k, s[5].path(t_k), "A1"))
 
+    # 5b. Wingman pulls 11.8 G for a second: the RvB server takes a health point every 0.3 s
+    s[1].g_at = [(300.0, 301.1, 11.8)]
+    s[1].hit_at = [(300.3, 1), (300.6, 1), (300.9, 1)]
+
+    # 5c. Bandit2's AIM-9 at Striker. Bandit2's game shows Striker 0.3 s late and the missile hits
+    #     there; against Striker's own track it runs out just short. Striker goes down 0.3 s after
+    #     the hit (the news reaching its game); Bandit2's game credits the kill.
+    lag = 0.3
+    for t_shot in [255.0 + 1.0 * k for k in range(40)]:
+        if math.dist(s[4].path(t_shot), s[2].path(t_shot)) > 5000.0:
+            continue
+        w = launch(t_shot, 1, s[4], 2, rng=6000.0, vmax=900.0, turn=3.0, cone=0.9, aim=s[2].path(t_shot + 3.0))
+        weapons.pop()
+        r = fly(w, {2: track_for_sim(s[2], late=lag), 4: track_for_sim(s[4])})
+        if r["end"]["reason"] != "hit" or r["end"].get("aircraft_index") != 2:
+            continue
+        flown = sum(math.dist(a[1:], b[1:]) for a, b in zip(r["path"], r["path"][1:]))
+        w["range"] = flown + 8.0
+        r2 = fly(w, {k.n: track_for_sim(k) for k in s[:6] if k.death is None or k.death > t_shot + 30.0})
+        if r2["end"]["reason"] == "hit":
+            continue
+        weapons.append(w)
+        s[2].death = r["end"]["t"] + lag
+        s[2].t1 = s[2].death + 3.0
+        kills.append((1, "A4", "A2", s[2].death + 0.1, s[2].path(s[2].death)))
+        booms.append((r["end"]["t"], s[2].path(r["end"]["t"] - lag), "A4"))
+        break
+    else:
+        raise SystemExit("no launch time found for Bandit2's shot at Striker")
+
     # 6. Bandit2 into the ground; Bandit1 back, then leaves in flight near Tester
     booms.append((s[4].death + 0.5, (24000.0, ground_y, 15200.0), "N"))
     events += [(2.0, "Server: RvB test event starts, good luck"), (s[4].death + 1.0, "[RED]Bandit2: lag spike!!"),
-               (482.0, "[RED]Bandit1 has left the server")]
+               (423.0, "[RED]Bandit1 has left the server")]
 
     # 7. The SAM (ground object 1) fires now and then. Tester's game shows it destroyed by Striker's
     #    rockets at 3:20 and credits the kill, but Bandit2's game keeps it, and it keeps firing:
@@ -247,9 +300,10 @@ def main(out, second=None):
     if second:
         write(second, s, grounds, weapons, kills, booms, events, loadouts, own=5, shift=37.25, lag=0.3,
               dead_ground={0: t_tank + 0.3})
-    print("wrote %s%s: %d sorties, %d weapons, %d kill credits; deaths: Bandit1 %.1f, Bandit3 %.1f, Bandit2 crash "
-          "%.1f, T-80U %.1f; false SAM kill at 200.2" % (out, " and " + second if second else "", len(s), len(weapons),
-                                                          len(kills) + 1, s[3].death, s[5].death, s[4].death, t_tank))
+    print("wrote %s%s: %d sorties, %d weapons, %d kill credits; deaths: Bandit1 %.1f, Bandit3 %.1f, Striker %.1f "
+          "(hit only as Bandit2's game saw it), Bandit2 crash %.1f, T-80U %.1f; false SAM kill at 200.2"
+          % (out, " and " + second if second else "", len(s), len(weapons), len(kills) + 1, s[3].death, s[5].death,
+             s[2].death, s[4].death, t_tank))
 
 
 def write(out, s, grounds, weapons, kills, booms, events, loadouts, own=1, shift=0.0, lag=0.0, dead_ground=None):

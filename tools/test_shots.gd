@@ -160,6 +160,88 @@ func _init():
 	await shot("16_tank_before")
 	main.seek(130.0)
 	await shot("17_tank_after")
+
+	# the Ground tab, the tank picked
+	ui.tabs.current_tab = ui.tabs.get_tab_idx_from_control(ui.ground_tree)
+	for team_item in ui.ground_tree.get_root().get_children():
+		for type_item in team_item.get_children():
+			for it in type_item.get_children():
+				if it.get_text(0).contains("T-80U"):
+					it.select(0)
+	await shot("18_ground_tab")
+
+	# name tags with health, after Bandit3's gun hits on Tester
+	var tester := entity("[BLUE]Tester")
+	main.seek(212.0)
+	main.follow(tester)
+	main.cam_distance = 120.0
+	main.cam_rot_x = -0.25
+	main.cam_rot_y = 2.2
+	main._tag_clock = 1.0
+	await shot("19_health_tag")
+
+	# Striker's death: the damage log in the details box
+	ui.tabs.current_tab = ui.tabs.get_tab_idx_from_control(ui.deaths_tree)
+	for it in ui.deaths_tree.get_root().get_children():
+		if it.get_text(0).contains("Striker"):
+			it.select(0)
+	await shot("20_damage_details")
+
+	# SAM and AAA ranges: in 3D over the island, then the top view
+	main._on_view_changed("ranges", true)
+	main._on_view_changed("aircraft_scale", 1.0)
+	main.seek(150.0)
+	main.tracked_id = ""
+	place(Vector3(26000, 5500, -9000), Vector3(22000, 600, -15200))
+	await shot("21_ranges_3d")
+	main.set_top_view(true)
+	main.tracked_id = ""
+	main.camera.position = Vector3(20000, main.TOP_HEIGHT, -12500)
+	main.camera.size = 16000.0
+	await shot("22_top_view_ranges")
+	ui.set_panel_visible(false)
+	main.seek(212.0)
+	main.follow(tester)
+	main.camera.size = 9000.0
+	main._tag_clock = 1.0
+	await shot("23_top_view_follow")
+	main.set_top_view(false)
+	main._on_view_changed("ranges", false)
+
+	# better lighting on and off: the island's hills
+	main.seek(150.0)
+	main.tracked_id = ""
+	place(Vector3(19000, 2600, -21000), Vector3(22500, 400, -15600))
+	await shot("24_lighting_on")
+	main._on_view_changed("lighting", false)
+	await shot("25_lighting_off")
+	main._on_view_changed("lighting", true)
+	main.follow(entity("[BLUE]Wingman"))
+	main.cam_distance = 45.0
+	main.cam_rot_x = -0.35
+	main.cam_rot_y = 0.9
+	await shot("26_lighting_model_on")
+	main._on_view_changed("lighting", false)
+	await shot("27_lighting_model_off")
+	main._on_view_changed("lighting", true)
+	ui.set_panel_visible(true)
+
+	# the start menu with a folder of replays from two events
+	var dir := OS.get_user_data_dir().path_join("shot_folder_pick")
+	DirAccess.make_dir_recursive_absolute(dir)
+	var src: String = OS.get_environment("TEST_EVENT").get_base_dir()
+	var k := 0
+	for f in DirAccess.get_files_at(src):
+		if f.ends_with(".yfs"):
+			DirAccess.copy_absolute(src.path_join(f), dir.path_join("RvB6_%s_20260718.yfs" % f.get_basename()))
+			k += 1
+	DirAccess.copy_absolute(dir.path_join("RvB6_tester_20260718.yfs"), dir.path_join("Practice_2026-07-11.yfs"))
+	ui.show_start_menu(main._newest_event())
+	ui._on_folder_picked(dir)
+	await shot("28_start_menu_folder")
+	for f in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(dir.path_join(f))
+	DirAccess.remove_absolute(dir)
 	quit()
 
 # Camera beside an aircraft, far enough to see it and its shadow on the ground straight below.

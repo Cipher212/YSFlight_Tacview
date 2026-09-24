@@ -31,6 +31,14 @@ const SRF_WORDS = {"VER": "V", "FAC": "F", "COL": "C", "NOR": "N", "BRI": "B", "
 enum Kind {LIT, BRIGHT, CLEAR}
 
 static var _materials := []
+static var glossy := false    # better lighting (View tab): shinier faces, so the shape reads
+
+# Better lighting on or off for every model made from here (aircraft, ground objects, weapons).
+static func set_lighting(better: bool) -> void:
+	glossy = better
+	for k in [Kind.LIT, Kind.CLEAR]:
+		if k < _materials.size():
+			_materials[k].roughness = 0.35 if better else 1.0
 
 # parse(), from a cache file when the model was read before (user://model_cache, one file per
 # model, kept while the model file is unchanged): reading a model is slow in GDScript, loading
@@ -394,6 +402,8 @@ static func _material(bright: bool, clear: bool) -> StandardMaterial3D:
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED      # YSFlight draws both sides of a face
 	if bright:
 		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	else:
+		m.roughness = 0.35 if glossy else 1.0
 	if clear:
 		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	return m

@@ -25,6 +25,11 @@ const AIRCRAFT_DIR = "aircraft"         # the aircraft's game files (.dat + .dnm
 const TAG_PIXEL = 0.0007         # name tag size (times the text size setting)
 const TAG_INTERVAL = 0.2         # seconds between name tag updates
 const VECTOR_SECONDS = 1.0       # a flight path vector reaches where the aircraft will be in 1 s
+# Top view (T): the map from straight above, north up, drawn without perspective (orthographic)
+const TOP_HEIGHT = 60000.0       # metres: the top view's camera height (above everything)
+const TOP_SIZE_MIN = 300.0       # metres from the bottom to the top of the screen, zoomed in fully
+const TOP_SIZE_MAX = 120000.0
+const TOP_AIRCRAFT_PX = 18.0     # in the top view an aircraft is drawn at least this long on screen
 const VECTOR_COLOR = Color(1.0, 0.9, 0.25)
 const VECTOR_WIDTH_PX = 1.5
 const STRIP_NEAR = 1.0           # metres in front of the camera where the vectors are cut off
@@ -61,7 +66,7 @@ void fragment() {
 const VIEW_DEFAULTS = {"aircraft_scale": 1.0, "weapon_scale": 1.0, "text_scale": 1.0,
 	"trail_seconds": 30.0, "ribbon_width": 1.0, "marker_seconds": 30.0, "ribbons": true,
 	"vectors": true, "tags": true, "tethers": true, "markers": true, "ground": true, "clouds": true,
-	"blocky": false, "smoke": true, "shadows": true}
+	"blocky": false, "smoke": true, "shadows": true, "ranges": false, "lighting": true}
 
 var camera: Camera3D
 var cam_rot_x: float = -0.5
@@ -83,10 +88,13 @@ var active_aircraft = {} # marker nodes: position only, label rides on these
 var aircraft_models = {} # model inside each marker: gets the attitude
 var aircraft_tags = {}   # name tag on each marker
 var aircraft_shadows = {} # shadow material of each aircraft (its ground plane is set every frame)
+var full_health = {}     # aircraft id -> its health when whole (at the start of its track)
 var telemetry_data = {}
 var current_frame_indices = {}
 var order: Array = []            # aircraft ids by start time (for Tab)
 var tracked_id := ""             # aircraft the camera follows ("" = free camera)
+var top_view := false            # the map from straight above (T)
+var _saved_view := {}            # the 3D camera while the top view is on
 
 var ui
 var builder
@@ -96,6 +104,8 @@ var grounds: Node3D
 var map_node: Node3D             # the YSFlight map (map_layer.gd); kept while the field stays the same
 var ground_plane: MeshInstance3D # base plane beyond the drawn map
 var sky_material: ProceduralSkyMaterial
+var sun: DirectionalLight3D      # lights the models (the map carries its own daylight)
+var world_env: WorldEnvironment
 var vectors: ArrayMesh           # flight path vectors and nose lines, rebuilt every frame
 var vector_node: MeshInstance3D
 var view := VIEW_DEFAULTS.duplicate()
@@ -126,11 +136,13 @@ func _ready():
 	ui.aircraft_chosen.connect(_on_aircraft_chosen)
 	ui.kill_chosen.connect(_on_kill_chosen)
 	ui.death_chosen.connect(_on_death_chosen)
+	ui.ground_chosen.connect(_on_ground_chosen)
 	ui.rewind_pressed.connect(rewind)
 	ui.fast_forward_pressed.connect(fast_forward)
 	ui.frame_step.connect(func(d): frame_step(d, false))
 	ui.layout_changed.connect(_place_feed)
 	ui.panel_toggled.connect(func(shown): _set_setting("side_panel", shown))
+	ui.top_view_toggled.connect(func(): set_top_view(not top_view))
 	ui.set_panel_visible(_setting("side_panel", true))
 	for key in view:
 		view[key] = _setting("view_" + key, view[key])
@@ -172,13 +184,13 @@ func setup_environment():
 	sky.sky_material = sky_material
 	env.sky = sky
 
-	var world_env = WorldEnvironment.new()
+	world_env = WorldEnvironment.new()
 	world_env.environment = env
 	add_child(world_env)
 
-	var light = DirectionalLight3D.new()
-	light.rotation_degrees = Vector3(-45, 45, 0)
-	add_child(light)
+	sun = DirectionalLight3D.new()
+	sun.rotation_degrees = Vector3(-45, 45, 0)
+	add_child(sun)
 
 	camera = Camera3D.new()
 	camera.current = true
@@ -224,6 +236,7 @@ func _rebuild_models() -> void:
 		active_aircraft[id].add_child(model)
 		old.queue_free()
 		aircraft_models[id] = model
+		_cast_shadows(model, view["lighting"])
 		_add_shadow(model, aircraft_shadows[id])
 
 func _box_model(team_color: Color) -> Node3D:
@@ -482,6 +495,7 @@ func show_map(data) -> void:
 	map_node = load("res://map_layer.gd").new()
 	add_child(map_node)
 	map_node.build(data)
+	map_node.set_lighting(view["lighting"])
 	# beyond the drawn map: the field's ground colour (GND), unlit, as a backdrop that hides
 	# nothing, like YSFlight's. Without depth writes Godot draws it in the transparent pass: first
 	# there, so the map's layers (map_layer.gd) paint over it.
@@ -506,6 +520,7 @@ func clear_event() -> void:
 	active_aircraft.clear()
 	aircraft_models.clear()
 	aircraft_shadows.clear()
+	full_health.clear()
 	aircraft_tags.clear()
 	telemetry_data.clear()
 	current_frame_indices.clear()
@@ -535,6 +550,7 @@ func spawn_aircraft(data):
 
 			var plane_model = create_aircraft_model(entity)
 			marker.add_child(plane_model)
+			_cast_shadows(plane_model, view["lighting"])
 			var shadow := ShaderMaterial.new()
 			shadow.shader = _shadow_shader
 			shadow.render_priority = SHADOW_PRIORITY
@@ -560,6 +576,10 @@ func spawn_aircraft(data):
 			active_aircraft[air_id] = marker
 			aircraft_models[air_id] = plane_model
 			aircraft_tags[air_id] = tag
+			var most := 0                # whole at the start (the first 2 s: a quick look, big events)
+			for k in mini(t_frames.size(), 40):
+				most = maxi(most, int(t_frames[k]["ctrl"][9]))
+			full_health[air_id] = most
 			telemetry_data[air_id] = t_frames
 			current_frame_indices[air_id] = 0
 
@@ -631,6 +651,9 @@ func _process(delta):
 	if tag_now:
 		_tag_clock = 0.0
 	var size: float = view["aircraft_scale"]
+	var model_size := size
+	if top_view:                   # big enough to see from above (a 15 m aircraft TOP_AIRCRAFT_PX long)
+		model_size = maxf(size, _metres_per_pixel() * TOP_AIRCRAFT_PX / 15.0)
 	for air_id in active_aircraft.keys():
 		var marker = active_aircraft[air_id]
 		var frames = telemetry_data[air_id]
@@ -658,7 +681,7 @@ func _process(delta):
 			# slerp swings between two different attitudes every frame.
 			var attitude: Basis = ys_basis(f1).slerp(ys_basis(f2), weight)
 			var model: Node3D = aircraft_models[air_id]
-			model.basis = attitude.scaled(Vector3(size, size, size))
+			model.basis = attitude.scaled(Vector3(model_size, model_size, model_size))
 			if model.has_meta("dnm"):            # gear (0..255 up..down) and afterburner (flag bit 1)
 				DnmModel.pose(model, f1["ctrl"][3] / 255.0, (int(f1["ctrl"][8]) & 1) == 1)
 			positions[air_id] = marker.position
@@ -672,7 +695,7 @@ func _process(delta):
 			if view["vectors"]:
 				vector_items.append([marker.position, velocity, -attitude.z])
 			if tag_now:
-				_update_tag(air_id, marker.position.y, velocity.length())
+				_update_tag(air_id, marker.position.y, velocity.length(), f1["ctrl"])
 		else:
 			marker.visible = false
 
@@ -689,6 +712,20 @@ func _process(delta):
 	ui.set_info(_info_text())
 
 func _update_camera(delta):
+	if top_view:
+		if tracked_id != "" and active_aircraft.has(tracked_id):
+			var p := _pos_at(telemetry_data[tracked_id], replay_time)
+			camera.position = Vector3(p.x, TOP_HEIGHT, p.z)
+		else:
+			var move := Vector3.ZERO           # north is up on the screen (-z)
+			if Input.is_key_pressed(KEY_W): move.z -= 1.0
+			if Input.is_key_pressed(KEY_S): move.z += 1.0
+			if Input.is_key_pressed(KEY_A): move.x -= 1.0
+			if Input.is_key_pressed(KEY_D): move.x += 1.0
+			var pace := camera.size * (1.8 if Input.is_key_pressed(KEY_SHIFT) else 0.6)
+			camera.position += move.normalized() * pace * delta
+		camera.rotation = Vector3(-PI / 2.0, 0.0, 0.0)
+		return
 	if tracked_id != "" and active_aircraft.has(tracked_id):
 		var target_pos = _pos_at(telemetry_data[tracked_id], replay_time)
 		var offset = Vector3(0, 0, cam_distance)
@@ -712,6 +749,77 @@ func _update_camera(delta):
 			current_speed *= 10.0
 
 		camera.position += dir.normalized() * current_speed * delta
+
+# The top view on or off. On: straight down on what the camera was looking at (the aircraft it
+# follows, else the ground ahead), about as wide as the view was; off: the 3D camera as it was.
+func set_top_view(on: bool) -> void:
+	if on == top_view:
+		return
+	top_view = on
+	if on:
+		_saved_view = {"position": camera.position, "rot_x": cam_rot_x, "rot_y": cam_rot_y}
+		var centre := camera.position
+		var span := 2.0 * cam_distance
+		if tracked_id != "" and active_aircraft.has(tracked_id):
+			centre = _pos_at(telemetry_data[tracked_id], replay_time)
+			span = maxf(cam_distance * 12.0, 8000.0)
+		else:
+			var fwd := -camera.global_transform.basis.z
+			if fwd.y < -0.05:                  # where the view meets sea level
+				centre = camera.position + fwd * (camera.position.y / -fwd.y)
+			else:
+				centre = camera.position + Vector3(fwd.x, 0.0, fwd.z).normalized() * 5000.0
+			span = 2.0 * camera.position.distance_to(centre)
+		camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+		camera.size = clampf(span, 4000.0, 60000.0)
+		camera.near = 1.0
+		camera.position = Vector3(centre.x, TOP_HEIGHT, centre.z)
+		camera.rotation = Vector3(-PI / 2.0, 0.0, 0.0)
+	else:
+		camera.projection = Camera3D.PROJECTION_PERSPECTIVE
+		camera.near = 0.05
+		if not _saved_view.is_empty():
+			camera.position = _saved_view["position"]
+			cam_rot_x = _saved_view["rot_x"]
+			cam_rot_y = _saved_view["rot_y"]
+	ui.show_top_view(on)
+
+# Better lighting (View tab) or YSFlight's flat daylight: the hills lit by a lower sun
+# (map_layer.gd); the models shinier, lit from that same sun, shading themselves (their own
+# shadows reach only models: the map is unlit, so the ground keeps just the YSFlight shadow)
+# and darker in their creases (ambient occlusion). Off also saves the graphics card that work.
+func _apply_lighting(better: bool) -> void:
+	DnmModel.set_lighting(better)
+	if map_node != null:
+		map_node.set_lighting(better)
+	if better:
+		var s: Vector3 = map_layer_sun()
+		sun.basis = Basis.looking_at(-s, Vector3.UP)
+		sun.light_energy = 1.15
+	else:
+		sun.rotation_degrees = Vector3(-45, 45, 0)
+		sun.light_energy = 1.0
+	sun.shadow_enabled = better
+	sun.directional_shadow_max_distance = 600.0
+	world_env.environment.ssao_enabled = better
+	for id in aircraft_models:
+		_cast_shadows(aircraft_models[id], better)
+
+# Whether an aircraft's own parts cast (self-)shadows; its YSFlight-style shadow never does.
+static func _cast_shadows(model: Node3D, on: bool) -> void:
+	for part in model.find_children("*", "MeshInstance3D", true, false):
+		if not part.is_in_group("aircraft_shadow"):
+			part.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if on \
+				else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+# The better lighting's sun in viewer axes (z flips).
+static func map_layer_sun() -> Vector3:
+	var s: Vector3 = load("res://map_layer.gd").RELIEF_SUN
+	return Vector3(s.x, s.y, -s.z)
+
+# Metres per screen pixel in the top view (window height in real pixels).
+func _metres_per_pixel() -> float:
+	return camera.size / maxf(get_window().size.y, 1.0)
 
 # Jump the replay clock to time t, forwards or backwards. Every aircraft is put
 # back on the right frame (_process only ever steps frames forwards, so after a
@@ -765,8 +873,9 @@ func _draw_vectors(items: Array, size: float) -> void:
 	var cam := camera.global_position
 	var fwd := -camera.global_transform.basis.z
 	# size of one screen pixel 1 m in front of the camera (window height in real pixels: the UI's
-	# stretch mode gives the viewport rect in scaled units)
-	var pixel := 2.0 * tan(deg_to_rad(camera.fov) * 0.5) / maxf(get_window().size.y, 1.0)
+	# stretch mode gives the viewport rect in scaled units); in the top view the same everywhere
+	var pixel := _metres_per_pixel() if top_view else \
+		2.0 * tan(deg_to_rad(camera.fov) * 0.5) / maxf(get_window().size.y, 1.0)
 	var half := 0.5 * VECTOR_WIDTH_PX * pixel     # half the width, per metre from the camera
 	var verts := PackedVector3Array()
 	var cols := PackedColorArray()
@@ -779,13 +888,13 @@ func _draw_vectors(items: Array, size: float) -> void:
 		var length := speed * VECTOR_SECONDS * size
 		var dir := velocity / speed
 		var tip := p + dir * length
-		var side := dir.cross(cam - tip)             # arrow head flat towards the camera
+		var side := dir.cross(-fwd if top_view else cam - tip)   # arrow head flat towards the camera
 		side = side.normalized() * length * 0.05 if side.length_squared() > 1e-9 else Vector3.ZERO
 		var back := tip - dir * length * 0.12
-		_strip(verts, cols, p, tip, VECTOR_COLOR, cam, fwd, half)
-		_strip(verts, cols, tip, back + side, VECTOR_COLOR, cam, fwd, half)
-		_strip(verts, cols, tip, back - side, VECTOR_COLOR, cam, fwd, half)
-		_strip(verts, cols, p, p + it[2].normalized() * length, NOSE_COLOR, cam, fwd, half)
+		_strip(verts, cols, p, tip, VECTOR_COLOR, cam, fwd, half, top_view)
+		_strip(verts, cols, tip, back + side, VECTOR_COLOR, cam, fwd, half, top_view)
+		_strip(verts, cols, tip, back - side, VECTOR_COLOR, cam, fwd, half, top_view)
+		_strip(verts, cols, p, p + it[2].normalized() * length, NOSE_COLOR, cam, fwd, half, top_view)
 	if verts.is_empty():
 		return
 	var arrays := []
@@ -795,11 +904,11 @@ func _draw_vectors(items: Array, size: float) -> void:
 	vectors.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 
 # A line from a to b as two triangles facing the camera; each end as wide as `half` times its
-# distance from the camera (so the same number of pixels everywhere). Only the part in front of
-# the camera (fwd: where it looks) is drawn: a line reaching past the camera would otherwise
-# blow up into a wide beam across the screen.
+# distance from the camera (so the same number of pixels everywhere; flat: `half` metres, the
+# top view has no perspective). Only the part in front of the camera (fwd: where it looks) is
+# drawn: a line reaching past the camera would otherwise blow up into a wide beam across the screen.
 static func _strip(verts: PackedVector3Array, cols: PackedColorArray, a: Vector3, b: Vector3, c: Color,
-		cam: Vector3, fwd: Vector3, half: float) -> void:
+		cam: Vector3, fwd: Vector3, half: float, flat := false) -> void:
 	var da := (a - cam).dot(fwd)
 	var db := (b - cam).dot(fwd)
 	if da < STRIP_NEAR and db < STRIP_NEAR:
@@ -811,24 +920,31 @@ static func _strip(verts: PackedVector3Array, cols: PackedColorArray, a: Vector3
 	var d := b - a
 	if d.length_squared() < 1e-6:
 		return
-	var sa := d.cross(cam - a)
-	var sb := d.cross(cam - b)
+	var sa := d.cross(-fwd if flat else cam - a)
+	var sb := d.cross(-fwd if flat else cam - b)
 	if sa.length_squared() < 1e-12 or sb.length_squared() < 1e-12:
 		return
-	sa = sa.normalized() * half * a.distance_to(cam)
-	sb = sb.normalized() * half * b.distance_to(cam)
+	sa = sa.normalized() * half * (1.0 if flat else a.distance_to(cam))
+	sb = sb.normalized() * half * (1.0 if flat else b.distance_to(cam))
 	for v in [a - sa, a + sa, b + sb, a - sa, b + sb, b - sb]:
 		verts.append(v)
 		cols.append(c)
 
 # Name tag: pilot, aircraft, then altitude (ft) and true airspeed (kt) from the track.
-func _update_tag(id: String, alt_m: float, speed_ms: float) -> void:
+func _update_tag(id: String, alt_m: float, speed_ms: float, ctrl: Array) -> void:
 	var e = event_data["entities"][id]
-	var text := "%s\n%s\n%s ft   %d kt" % [e["player"], Fmt.short_type(e["aircraft"]),
+	var text := "%s  %s\n%s\n%s ft   %d kt" % [e["player"], health_text(id, ctrl), Fmt.short_type(e["aircraft"]),
 		Fmt.thousands(int(round(alt_m * YsAir.M_TO_FT))), int(round(speed_ms * YsAir.MS_TO_KT))]
 	var tag: Label3D = aircraft_tags[id]
 	if tag.text != text:
 		tag.text = text
+
+# "9/10 health" (the replay's health against the health at the start), "going down" once hit
+# for good (the game then sets health to 1).
+func health_text(id: String, ctrl: Array) -> String:
+	if int(ctrl[0]) in [4, 5]:
+		return "going down"
+	return "%d/%d health" % [int(ctrl[9]), full_health.get(id, int(ctrl[9]))]
 
 # --- VIEW SETTINGS (View tab) ---
 
@@ -851,6 +967,8 @@ func _apply_view() -> void:
 	if grounds:
 		grounds.visible = view["ground"]
 		grounds.show_clouds(view["clouds"])
+		grounds.show_ranges(view["ranges"])
+	_apply_lighting(view["lighting"])
 	get_tree().call_group("aircraft_shadow", "set_visible", view["shadows"])
 
 # --- WHICH AIRCRAFT ---
@@ -876,6 +994,35 @@ func _on_death_chosen(id: String, t: float) -> void:
 	seek(t - 8.0)
 	follow(id)
 
+# From the Ground list: the free camera looks at the object, a few seconds before it was destroyed
+# (or credited, or damaged); t < 0: the time stays.
+func _on_ground_chosen(index: int, t: float) -> void:
+	if t >= 0.0:
+		seek(t - 5.0)
+	var g: Dictionary = event_data["ground_objects"][index]
+	var samples: Array = g.get("samples", [])
+	if samples.is_empty():
+		return
+	var at: Dictionary = samples[0]
+	for sm in samples:
+		if float(sm["t"]) <= replay_time:
+			at = sm
+	var p := Vector3(at["x"], at["y"], -at["z"])
+	var info = g.get("dat")
+	var size := 20.0
+	if info != null and info.get("box") != null:
+		var b: Array = info["box"]
+		size = maxf(maxf(b[3] - b[0], b[4] - b[1]), b[5] - b[2])
+	var back := clampf(size * 5.0, 150.0, 3000.0)
+	tracked_id = ""
+	if top_view:
+		camera.position = Vector3(p.x, TOP_HEIGHT, p.z)
+		return
+	camera.position = p + Vector3(0.55, 0.45, 0.7).normalized() * back
+	var d := (p - camera.position).normalized()
+	cam_rot_x = asin(d.y)
+	cam_rot_y = atan2(-d.x, -d.z)
+
 func _in_air_now() -> Array:
 	return order.filter(func(id): return active_aircraft[id].visible)
 
@@ -883,8 +1030,13 @@ func _info_text() -> String:
 	if event_data == null:
 		return ""
 	var hint := "Zoom %d m  |  Tab: next aircraft  |  Esc: free camera  |  click an aircraft to follow it" % cam_distance
+	if top_view:
+		hint = "Top view %.1f km  |  wheel: zoom  |  Tab: next  |  Esc: stop following  |  T: 3D" % (camera.size / 1000.0)
 	if tracked_id == "":
-		return "Free camera (WASD, E/Q, Shift)  |  Tab or click an aircraft to follow it"
+		if top_view:
+			return "Top view %.1f km  |  WASD / right-drag: move  |  wheel: zoom  |  click: follow  |  T: 3D" \
+				% (camera.size / 1000.0)
+		return "Free camera (WASD, E/Q, Shift)  |  Tab or click an aircraft to follow it  |  T: top view"
 	var e = event_data["entities"][tracked_id]
 	var frames = telemetry_data[tracked_id]
 	var iff := int(e.get("iff", 0))
@@ -911,8 +1063,9 @@ func _info_text() -> String:
 	text += "\nIAS %d kt   TAS %d kt   M %.2f   ALT %d ft   G %.1f" % [
 		YsAir.ias(tas, alt) * YsAir.MS_TO_KT, tas * YsAir.MS_TO_KT, tas / YsAir.mach_one(alt),
 		alt * YsAir.M_TO_FT, f.get("g", 0.0)]
-	text += "\nthrottle %d%%%s   gear %s   %s" % [ctrl[10], " + afterburner" if int(ctrl[8]) & 1 else "",
-		"down" if int(ctrl[3]) > 127 else "up", state]
+	text += "\nthrottle %d%%%s   gear %s   %s   %s" % [ctrl[10], " + afterburner" if int(ctrl[8]) & 1 else "",
+		"down" if int(ctrl[3]) > 127 else "up", state,
+		health_text(tracked_id, ctrl) if int(ctrl[0]) not in [4, 5] else ""]
 	if where != "":
 		text += "\n" + where
 	if fate.get("kind", "") != "":
@@ -938,6 +1091,8 @@ func _unhandled_input(event):
 				tracked_id = ""
 			KEY_P:
 				ui.toggle_panel()
+			KEY_T:
+				set_top_view(not top_view)
 			KEY_SPACE:
 				set_playing(not playing)
 			KEY_J:
@@ -968,7 +1123,10 @@ func _unhandled_input(event):
 				ui.show_speed(playback_speed)
 
 	if event is InputEventMouseButton and event.pressed:
-		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
+		if top_view and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+			var k := 1.0 / 1.15 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.15
+			camera.size = clampf(camera.size * k, TOP_SIZE_MIN, TOP_SIZE_MAX)
+		elif event.button_index == MOUSE_BUTTON_WHEEL_UP:
 			cam_distance = clamp(cam_distance / 1.15, 15.0, 80000.0)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			cam_distance = clamp(cam_distance * 1.15, 15.0, 80000.0)
@@ -981,13 +1139,32 @@ func _unhandled_input(event):
 		else:
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
+	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and top_view:
+		tracked_id = ""                         # dragging the map: stop following
+		var per := camera.size / maxf(get_viewport().get_visible_rect().size.y, 1.0)
+		camera.position -= Vector3(event.relative.x, 0.0, event.relative.y) * per
+		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		cam_rot_y -= event.relative.x * mouse_sensitivity
 		cam_rot_x -= event.relative.y * mouse_sensitivity
 		cam_rot_x = clamp(cam_rot_x, -1.5, 1.5)
 
-# Click-to-follow: the aircraft closest to the click direction, within about 1.5 degrees.
+# Click-to-follow: the aircraft closest to the click direction, within about 1.5 degrees (in the
+# top view: within 14 screen units of the click).
 func _pick(screen_pos: Vector2) -> void:
+	if top_view:
+		var near := ""
+		var near_d := 14.0
+		for id in active_aircraft:
+			var m: Node3D = active_aircraft[id]
+			if m.visible:
+				var d := camera.unproject_position(m.global_position).distance_to(screen_pos)
+				if d < near_d:
+					near = id
+					near_d = d
+		if near != "":
+			follow(near)
+		return
 	var origin := camera.project_ray_origin(screen_pos)
 	var ray := camera.project_ray_normal(screen_pos)
 	var best := ""
