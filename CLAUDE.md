@@ -120,9 +120,11 @@ its export templates; preset "Windows Desktop" in `export_presets.cfg`: pck embe
 `build/YSFlight-Replay-Viewer-win64.zip` (~47 MB): the .exe, the pipeline `.py` files,
 `aircraft/ gamefiles/ maps/`, `YSFLIGHT-master/runtime/{ground,misc,scenery}`, empty `events/`
 `Raw_Data/`, `README.txt`. The viewer runs `python/python.exe` next to it if present, else
-`python` on the PATH. The cloud session's network policy blocks www.python.org, so the first
-package (2026-09-24) has no Python: opening events works anywhere, building events needs Python
-installed. Not run on Windows here (no Windows); the same export for Linux was run and checked.
+`python` on the PATH. GitHub Actions (`.github/workflows/package.yml`) builds it with Python
+3.12.10 embedded on every push to main or a `claude/` branch (or by hand); the user downloads it
+from the run's Artifacts (kept 30 days). The zip (~50 MB) is over the 30 MB file limit of the
+chat, and the cloud session's network policy blocks www.python.org, so Actions is the way to
+hand it over. Not run on Windows (no Windows here); the same export for Linux was run and checked.
 
 ## Testing
 
@@ -171,7 +173,7 @@ detonation/kill markers (time-limited), energy ribbons (own width), flight path 
 tags, black smoke for aircraft going down; fates with causes and likelihoods (Deaths tab, CHECK
 marks, details box), kill confidence; review queue (confirm / reject + notes, file next to the
 event); search, review filter, N / C jumps, loss ticks on the timeline; Messages tab; loadouts
-in the sortie details; compressed event files; the Windows package (without Python so far).
+in the sortie details; compressed event files; the Windows package (built by GitHub Actions).
 
 Agreed next steps, in order:
 1. Deeper evidence: re-fly missiles against the target as the shooter's replay saw it (should
@@ -180,8 +182,7 @@ Agreed next steps, in order:
 2. Cameras: top-down orthographic tactical map, kill review (frame shooter + victim, slow
    motion, loop), flight data strip (G, speed, height, throttle), engagement / missile cams,
    chase and cockpit views, declutter "only who's involved".
-3. Package: bundle Python once www.python.org is allowed (or the user supplies the zip);
-   maybe a GitHub Actions build. Later: server-replay master (May 2027).
+3. Later: server-replay master (May 2027).
 
 ## From the first chat (2026-09-23/24)
 

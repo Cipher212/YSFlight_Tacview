@@ -10,9 +10,10 @@ gathers the angles; scorers decide.
 ## What you need
 
 - **The Windows package** (`YSFlight-Replay-Viewer-win64.zip`): unzip it and double-click
-  `YSFlight Replay Viewer.exe`. No Godot needed. Building events from replays needs Python 3
-  installed (python.org, tick "Add python.exe to PATH") unless the package has a `python` folder;
-  opening an event someone shared needs nothing.
+  `YSFlight Replay Viewer.exe`. Nothing else to install: it carries its own Python for building
+  events. GitHub builds it: this repository's **Actions** tab > **Windows package** > the newest
+  run > **Artifacts** > `YSFlight-Replay-Viewer-win64` (kept 30 days; **Run workflow** makes a
+  new one).
 - **Or this folder as a project**: **Godot 4.7.2** (the standard build, not .NET): open this
   folder as a project, or run `Godot_v4.7.2-stable_win64.exe --path <this folder>`; and
   **Python 3** on the PATH (standard library only), which the viewer runs to build events.
@@ -68,6 +69,8 @@ python -X utf8 replay_parser.py --fld gamefiles/user/RvB/ww3/Luavi.fld -o events
 ```
 
 ## Making the Windows package
+
+GitHub does it on every change to `main` (`.github/workflows/package.yml`). By hand:
 
 ```
 python tools/package.py [--python-zip python-3.12.10-embed-amd64.zip]

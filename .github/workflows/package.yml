@@ -1,0 +1,39 @@
+# Builds the Windows package of the viewer (tools/package.py) on GitHub's servers, with Python
+# included, whenever main (or a claude/ branch) changes, or by hand (Actions > Windows package >
+# Run workflow). Download it from the run's page: Artifacts > YSFlight-Replay-Viewer-win64.
+name: Windows package
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, "claude/**"]
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Godot 4.7.2 and its Windows export template
+        run: |
+          curl -fsSL -o godot.zip https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_linux.x86_64.zip
+          unzip -q godot.zip && rm godot.zip
+          curl -fsSL -o templates.tpz https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_export_templates.tpz
+          mkdir -p ~/.local/share/godot/export_templates/4.7.2.stable
+          unzip -q -j templates.tpz templates/windows_release_x86_64.exe templates/version.txt -d ~/.local/share/godot/export_templates/4.7.2.stable
+          rm templates.tpz
+
+      - name: Import the project
+        run: ./Godot_v4.7.2-stable_linux.x86_64 --headless --path . --import
+
+      - name: Build the package
+        run: >
+          python3 tools/package.py --godot ./Godot_v4.7.2-stable_linux.x86_64
+          --python-zip https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YSFlight-Replay-Viewer-win64
+          path: build/YSFlight Replay Viewer/
+          retention-days: 30

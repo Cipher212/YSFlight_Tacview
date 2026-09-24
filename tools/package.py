@@ -82,8 +82,11 @@ def main():
     for d in DATA:
         shutil.copytree(os.path.join(REPO, d), os.path.join(folder, d),
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".gdignore"))
-    for d in ("events", "Raw_Data"):
+    for d, note in (("events", "Built events (.json.gz) go here, with their review files (.review.txt)."),
+                    ("Raw_Data", "You can keep the replays (.yfs) here.")):
         os.makedirs(os.path.join(folder, d))
+        with open(os.path.join(folder, d, "README.txt"), "w", encoding="utf-8", newline="\r\n") as f:
+            f.write(note + "\n")      # (also keeps the folder in zips that drop empty ones)
 
     bundled = False
     if args.python_zip:
@@ -108,8 +111,6 @@ def main():
             for f in files:
                 p = os.path.join(root, f)
                 z.write(p, os.path.relpath(p, args.out))
-        for d in ("events", "Raw_Data"):         # keep the empty folders
-            z.writestr(NAME + "/" + d + "/", "")
     print("done: %s (%.0f MB)%s" % (archive, os.path.getsize(archive) / 1e6,
                                     "" if bundled else "  - without Python (see --python-zip)"))
 
