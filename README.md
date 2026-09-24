@@ -21,8 +21,9 @@ gathers the angles; scorers decide.
 ## Using it
 
 1. Start the viewer. The start menu offers the last event, a saved one, or a new one.
-2. **New event:** choose the replays (`.yfs`) of one event (as many players' files as you
-   have; they are merged), check the map (`.fld`, picked from what the replays say), then Build.
+2. **New event:** Choose files... and pick all the replays (`.yfs`) of one event at once (hold
+   Ctrl and click each, or Shift-click a range, or Ctrl+A; as many players' files as you have:
+   they are merged), check the map (`.fld`, picked from what the replays say), then Build.
    The event file (`.json.gz`) goes to `events/`. Everyone scoring should use the same replays,
    or share one event file: the clock starts at the first aircraft seen, so different replay
    sets can give different times.
@@ -67,6 +68,8 @@ air-to-ground missile, dots = bomb (grey dots: a dropped fuel tank), short strea
 ```
 python -X utf8 replay_parser.py --fld gamefiles/user/RvB/ww3/Luavi.fld -o events/RvB6.json.gz Raw_Data/*.yfs
 ```
+
+(Works in PowerShell too: the pipeline expands `*` itself.)
 
 ## Making the Windows package
 

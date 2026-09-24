@@ -4,13 +4,21 @@ extends RefCounted
 # .dat names in a "WPNSHAPE <type> FLYING <file>" line, else the game's own model for that type
 # (YSFLIGHT-master/runtime/misc). Ground objects have no such lines, so they get the game's own.
 # The .dat files name files in the game's folders (user/RvB/weapon/AIM-120B.srf); here they are
-# looked up by file name in aircraft/weapon. A name that isn't there goes to the closest one
-# (AIM-9.srf -> AIM-9L.srf, the misspelt Phyton3.srf -> Python3.srf), else to the game's own
-# model (the drones' user/matrix_v2 files).
+# looked up by file name in aircraft/weapon. A name from this RvB pack that isn't there goes to
+# the closest one (AIM-9.srf -> AIM-9L.srf, the misspelt Phyton3.srf -> Python3.srf). A file from
+# a pack that isn't here (the drones' user/matrix_v2) goes to the same kind of weapon from this
+# pack, eastern for the aircraft in aircraft/red, western for those in aircraft/blue (the user:
+# red drones carry eastern weapons, blue drones western ones).
 
 const Paths = preload("res://paths.gd")
 const WEAPON_DIR = "aircraft/weapon"
 const STOCK_DIR = "YSFLIGHT-master/runtime/misc"
+const PACK_FOLDER = "user/rvb/weapon"    # where the RvB .dat files expect this weapon pack
+# WPNSHAPE keyword -> model (file name in aircraft/weapon) for weapons from a missing pack
+const EASTERN = {"AIM9": "R-73", "AIM9X": "R-73", "AIM120": "R-77", "AGM65": "Kh-25ML",
+	"B500": "FAB-250", "B250": "FAB-100", "RKT": "UB-32-57", "FUEL": "RussianFuelTank", "FLR": "flr"}
+const WESTERN = {"AIM9": "AIM-9L", "AIM9X": "AIM-9L", "AIM120": "AIM-120B", "AGM65": "AGM-114A",
+	"B500": "GBU-12", "B250": "Mk81", "RKT": "M261", "FUEL": "AmericanFuelTank", "FLR": "flr"}
 # weapon name in the event -> [WPNSHAPE keyword, the game's own model]
 const TYPES = {"AIM9": ["AIM9", "aim9.srf"], "AIM9X": ["AIM9X", "aim9x.srf"],
 	"AIM120": ["AIM120", "aim120.srf"], "AGM65": ["AGM65", "agm65.srf"],
@@ -61,6 +69,8 @@ static func _scan(dir: String, files: Dictionary, re: RegEx, out: Dictionary) ->
 static func _read_dat(path: String, files: Dictionary, re: RegEx, out: Dictionary) -> void:
 	var name := ""
 	var shapes := {}
+	var low := path.to_lower().replace("\\", "/")
+	var team: Dictionary = EASTERN if low.contains("/red/") else (WESTERN if low.contains("/blue/") else {})
 	for line in FileAccess.get_file_as_string(path).split("\n"):
 		var a := []
 		for m in re.search_all(line):
@@ -68,25 +78,30 @@ static func _read_dat(path: String, files: Dictionary, re: RegEx, out: Dictionar
 		if a.size() >= 2 and a[0] == "IDENTIFY":
 			name = a[1]
 		elif a.size() >= 4 and a[0] == "WPNSHAPE" and a[2] == "FLYING":
-			var model := _resolve(a[3], files)
+			var keyword := _keyword(a[1])
+			var model := _resolve(a[3], files, str(team.get(keyword, "")))
 			if model != "":
-				shapes[_keyword(a[1])] = model
+				shapes[keyword] = model
 	if name != "" and not out.has(name.to_upper()):
 		out[name.to_upper()] = shapes
 
 # A WPNSHAPE file: where the game's folder layout puts it under gamefiles, else by name in
-# aircraft/weapon: the same name, else the shortest one starting with it, else one at most two
-# letters different ("" if none).
-static func _resolve(rel: String, files: Dictionary) -> String:
+# aircraft/weapon: the same name; for a file of this RvB pack, else the shortest one starting with
+# it, else one at most two letters different; for a file of another pack, `equivalent` (the
+# team's weapon of that kind). "" if none.
+static func _resolve(rel: String, files: Dictionary, equivalent := "") -> String:
 	rel = rel.replace("\\", "/")
 	var direct := Paths.of("gamefiles").path_join(rel)
 	if FileAccess.file_exists(direct):
 		return direct
 	var want := _plain(rel.get_file().get_basename())
-	if want.length() < 3:
-		return ""
 	if files.has(want):
 		return files[want]
+	var folder := rel.get_base_dir().to_lower()
+	if folder != "" and not folder.ends_with(PACK_FOLDER):
+		return files.get(_plain(equivalent), "")
+	if want.length() < 3:
+		return ""
 	var best := ""
 	for k in files:
 		if k.begins_with(want) and (best == "" or k.length() < best.length() or (k.length() == best.length() and k < best)):

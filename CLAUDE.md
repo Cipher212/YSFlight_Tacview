@@ -36,7 +36,10 @@ The replays (`Raw_Data/`) and events (`events/`) are not in the repository (too 
    explosions, ground objects, sources, `events` = text messages, `loadouts` = WPNCFG). An `-o`
    name ending in `.gz` is written gzip-compressed (level 5: ~7x smaller, a few seconds more);
    the viewer builds `events/<name>.json.gz` and reads both `.json.gz` and old plain `.json`.
-   The pipeline puts its own folder on `sys.path` (Windows embeddable Python doesn't).
+   The pipeline puts its own folder on `sys.path` (Windows embeddable Python doesn't) and
+   expands `*` / `?` in replay names itself (PowerShell passes `Raw_Data/*.yfs` on as it is).
+   In the viewer: Menu > Choose files..., select all the event's replays at once (Ctrl / Shift
+   click), Build event -> `events/<first>_and_<n>_more.json.gz`.
 
 Viewer scripts: `node_3d.gd` (controller: clock, play/rewind/steps, loading on a thread,
 aircraft, name tags, flight path vectors, camera, keys, view settings), `ui_layer.gd` (start
@@ -80,10 +83,13 @@ kill feed), `weapon_models.gd` (which model each weapon uses), `ribbon_layer.gd`
   (types AIM9 AIM9X AIM120 AGM65 B500 B250 B500HD RKT FLR FUEL), else the game's own model in
   `YSFLIGHT-master/runtime/misc` (aim9, aim9x, aim120, agm65, bomb, bomb250, bomb500hd, rocket,
   fueltank). The `.dat` paths (`user/RvB/weapon/...`) are looked up by name in `aircraft/weapon`:
-  same name, else the shortest starting with it (AIM-9 -> AIM-9L, 13 aircraft), else at most 2
-  letters different (Phyton3 -> Python3); the drones' `user/matrix_v2` files aren't in the pack
-  (stock models). Flying models include their exhaust plume (bright faces). Flares stay balls.
-  Models are tinted 35 % towards the team colour, scaled by the weapon size.
+  same name, else the shortest starting with it (AIM-9 -> AIM-9L, 13 aircraft; the user: any
+  AIM-9 model is fine), else at most 2 letters different (Phyton3 -> Python3). Files from another
+  pack (the drones' `user/matrix_v2`, not here) get the team's weapon of that kind: aircraft in
+  `aircraft/red` eastern (R-77, R-73, Kh-25ML, FAB), `aircraft/blue` western (AIM-120B, AIM-9L,
+  AGM-114A, GBU-12, Mk81) - the user's rule for the drones. Flying models include their exhaust
+  plume (bright faces). Flares stay balls. Models are tinted 35 % towards the team colour,
+  scaled by the weapon size.
 - Trails show the weapon kind (user request): air-to-air solid from launch, AGM dashed (2 path
   samples on, 1 off), bombs dotted (last 3 s), dropped fuel tanks grey dots, rockets a 15 m
   streak, guns tracers; all in the shooter's team colour. The View tab explains it.

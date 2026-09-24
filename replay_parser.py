@@ -1,6 +1,6 @@
 """Turns one or more YSFlight replays (.yfs) of the same event into an event file for the viewer.
 
-    python replay_parser.py [options] replay1.yfs [replay2.yfs ...]
+    python replay_parser.py [options] replay1.yfs [replay2.yfs ...]    (or Raw_Data/*.yfs)
         -o, --out FILE   event file to write (default: parsed_telemetry.json); a name ending in
                          .gz is written gzip-compressed (several times smaller; the viewer reads both)
         --fld FILE       the map's .fld (default: the replay's field, found in the scenery lists)
@@ -14,6 +14,7 @@ timeline (event_merge.py); guided weapons are re-flown with YSFlight's missile c
 import argparse
 import bisect
 import collections
+import glob
 import gzip
 import json
 import math
@@ -325,7 +326,10 @@ def main():
     ap.add_argument("--fld", default=None, help="the map's .fld (default: found from the replay's field)")
     ap.add_argument("--pack", default=os.path.join(HERE, "gamefiles"))
     args = ap.parse_args()
-    replays = args.replays or [os.path.join("Raw_Data", "1-WW3_event.yfs")]
+    replays = []
+    for r in args.replays or [os.path.join("Raw_Data", "1-WW3_event.yfs")]:
+        # Windows' shells pass "Raw_Data/*.yfs" on as it is: the wildcards are expanded here
+        replays += (sorted(glob.glob(r)) or [r]) if ("*" in r or "?" in r) else [r]
     missing = [p for p in replays + ([args.fld] if args.fld else []) if not os.path.exists(p)]
     if missing:
         print("ERROR: file not found: %s" % ", ".join(missing))
