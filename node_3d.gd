@@ -8,10 +8,11 @@ extends Node3D
 # Speeds come from the track itself: distance flown between the samples either side of now,
 # over the time between them (true airspeed; YSFlight has no wind in RvB).
 #
-# Keys: Space play/pause, J play backwards (again: faster), K pause, L play fast (again: faster),
-# , and . one frame back/forward (Shift: 1 s), Left/Right -+10 s (Shift: 60 s), Home restart,
-# +/- speed, Tab / Shift+Tab next/previous aircraft in the air, Esc free camera, P side panel,
-# N / Shift+N next/previous kill, C / Shift+C next/previous kill or death still to review.
+# Keys (the defaults; View tab > Keys... changes them, keys.gd): Space play/pause, J play backwards
+# (again: faster), K pause, L play fast (again: faster), , and . one frame back/forward (Shift: 1 s),
+# Left/Right -+10 s (Shift: 60 s), Home restart, +/- speed, Tab / Shift+Tab next/previous aircraft
+# in the air, Esc free camera, P side panel, T top view, N / Shift+N next/previous kill, C / Shift+C
+# next/previous kill or death still to review, M cinematic mode (cinema.gd), F11 full screen.
 # Mouse: click an aircraft to follow it, right-drag to look around, wheel to zoom. Free camera:
 # WASD, E/Q, Shift = fast.
 
@@ -20,6 +21,7 @@ const Fmt = preload("res://fmt.gd")
 const Paths = preload("res://paths.gd")
 const DnmModel = preload("res://dnm_model.gd")
 const WeaponModels = preload("res://weapon_models.gd")
+const Keys = preload("res://keys.gd")
 const SETTINGS = "user://settings.cfg"
 const AIRCRAFT_DIR = "aircraft"         # the aircraft's game files (.dat + .dnm), in any subfolders
 const TAG_PIXEL = 0.0007         # name tag size (times the text size setting)
@@ -66,7 +68,8 @@ void fragment() {
 const VIEW_DEFAULTS = {"aircraft_scale": 1.0, "weapon_scale": 1.0, "text_scale": 1.0,
 	"trail_seconds": 30.0, "ribbon_width": 1.0, "marker_seconds": 30.0, "ribbons": true,
 	"vectors": true, "tags": true, "tethers": true, "markers": true, "ground": true, "clouds": true,
-	"blocky": false, "smoke": true, "shadows": true, "ranges": false, "lighting": true}
+	"blocky": false, "smoke": true, "shadows": true, "ranges": false, "lighting": true,
+	"cine_shake": 1.0, "cine_slow": 0.25, "cine_orbit": 12.0, "cine_crane": 5.0}
 
 var camera: Camera3D
 var cam_rot_x: float = -0.5
@@ -88,6 +91,7 @@ var active_aircraft = {} # marker nodes: position only, label rides on these
 var aircraft_models = {} # model inside each marker: gets the attitude
 var aircraft_tags = {}   # name tag on each marker
 var aircraft_shadows = {} # shadow material of each aircraft (its ground plane is set every frame)
+var aircraft_attitude = {} # attitude of each aircraft in the air now (for the cinematic cameras)
 var full_health = {}     # aircraft id -> its health when whole (at the start of its track)
 var telemetry_data = {}
 var current_frame_indices = {}
@@ -98,6 +102,8 @@ var _saved_view := {}            # the 3D camera while the top view is on
 
 var ui
 var builder
+var keys = Keys.new()            # the keyboard shortcuts (the user's own choice of keys)
+var cinema                       # cinematic mode (cinema.gd)
 var combat: Node3D
 var ribbons: Node3D
 var grounds: Node3D
@@ -128,7 +134,10 @@ func _ready():
 	get_window().title = "YSFlight Replay Viewer" + (("  " + FileAccess.get_file_as_string(version_file).strip_edges())
 		if FileAccess.file_exists(version_file) else "")
 	setup_environment()
+	for a in Keys.ACTIONS:
+		keys.keys[a[0]] = int(_setting("key_" + a[0], a[2]))
 	ui = load("res://ui_layer.gd").new()
+	ui.keys = keys
 	add_child(ui)
 	ui.open_replays.connect(build_event)
 	ui.open_event.connect(load_event)
@@ -147,11 +156,17 @@ func _ready():
 	ui.layout_changed.connect(_place_feed)
 	ui.panel_toggled.connect(func(shown): _set_setting("side_panel", shown))
 	ui.top_view_toggled.connect(func(): set_top_view(not top_view))
+	ui.cinema_pressed.connect(func(): set_cinema(true))
+	ui.key_chosen.connect(_on_key_chosen)
+	ui.keys_reset.connect(_on_keys_reset)
 	ui.set_panel_visible(_setting("side_panel", true))
 	for key in view:
 		view[key] = _setting("view_" + key, view[key])
 	ui.show_view(view)
 	ui.view_changed.connect(_on_view_changed)
+	cinema = load("res://cinema.gd").new()
+	cinema.main = self
+	add_child(cinema)
 	builder = load("res://event_builder.gd").new()
 	add_child(builder)
 	builder.progress.connect(func(p, text): ui.show_busy(p, "Building the event: " + text))
@@ -514,6 +529,9 @@ func show_map(data) -> void:
 	sky_material.ground_bottom_color = map_node.base_color
 
 func clear_event() -> void:
+	if cinema.on:
+		set_cinema(false)
+	cinema.event_cleared()
 	if event_root != null:
 		event_root.queue_free()
 	event_root = null
@@ -524,6 +542,7 @@ func clear_event() -> void:
 	active_aircraft.clear()
 	aircraft_models.clear()
 	aircraft_shadows.clear()
+	aircraft_attitude.clear()
 	full_health.clear()
 	aircraft_tags.clear()
 	telemetry_data.clear()
@@ -597,11 +616,14 @@ func spawn_aircraft(data):
 
 # Play (forwards, at the chosen speed) or pause. Playing from the very end starts again.
 func set_playing(on: bool) -> void:
+	var was := playing
 	playing = on and event_data != null
 	if playing:
 		play_direction = 1
 		if replay_time >= t_max:
 			seek(t_min)
+		if not was and cinema.on:
+			cinema.note_play()           # Retake comes back here
 
 func restart() -> void:
 	seek(t_min)
@@ -642,11 +664,15 @@ func frame_step(direction: int, whole_second: bool) -> void:
 	seek(replay_time + direction * (1.0 if whole_second else 0.05))
 
 func _process(delta):
-	if playing:
-		replay_time += delta * playback_speed * play_direction
+	# the cinematic mode eases the clock into and out of slow motion and pauses
+	var run: float = (1.0 if playing else 0.0) if not cinema.on else cinema.time_rate(delta, playing)
+	if run > 0.0:
+		replay_time += delta * playback_speed * play_direction * run
 		if replay_time >= t_max or replay_time <= t_min:
 			replay_time = clampf(replay_time, t_min, t_max)
 			playing = false
+			if cinema.on:
+				cinema.stop_now()
 
 	var positions := {}          # aircraft in the air now: id -> position (for missile tethers)
 	var vector_items := []       # [position, velocity, nose direction], drawn once the camera has moved
@@ -654,7 +680,7 @@ func _process(delta):
 	var tag_now: bool = _tag_clock >= TAG_INTERVAL and view["tags"]
 	if tag_now:
 		_tag_clock = 0.0
-	var size: float = view["aircraft_scale"]
+	var size: float = view["aircraft_scale"] if not cinema.on else 1.0   # the cinematic mode: true size
 	var model_size := size
 	if top_view:                   # big enough to see from above (a 15 m aircraft TOP_AIRCRAFT_PX long)
 		model_size = maxf(size, _metres_per_pixel() * TOP_AIRCRAFT_PX / 15.0)
@@ -680,10 +706,14 @@ func _process(delta):
 			if time_gap > 0:
 				weight = clamp((replay_time - f1["t"]) / time_gap, 0.0, 1.0)
 
-			marker.position = ys_position(f1).lerp(ys_position(f2), weight)
+			if cinema.on:                # a smooth curve through the samples (slow motion, close cameras)
+				marker.position = _smooth(frames, idx, weight)
+			else:
+				marker.position = ys_position(f1).lerp(ys_position(f2), weight)
 			# Both keyframes must go through the same conversion, or the
 			# slerp swings between two different attitudes every frame.
 			var attitude: Basis = ys_basis(f1).slerp(ys_basis(f2), weight)
+			aircraft_attitude[air_id] = attitude
 			var model: Node3D = aircraft_models[air_id]
 			model.basis = attitude.scaled(Vector3(model_size, model_size, model_size))
 			if model.has_meta("dnm"):            # gear (0..255 up..down) and afterburner (flag bit 1)
@@ -696,7 +726,7 @@ func _process(delta):
 				shadow.set_shader_parameter("ground_point", Vector3(marker.position.x, ground[0], marker.position.z))
 				shadow.set_shader_parameter("ground_normal", ground[1])
 			var velocity := _velocity(frames, idx)
-			if view["vectors"]:
+			if view["vectors"] and not cinema.on:
 				vector_items.append([marker.position, velocity, -attitude.z])
 			if tag_now:
 				_update_tag(air_id, marker.position.y, velocity.length(), f1["ctrl"])
@@ -710,7 +740,10 @@ func _process(delta):
 	if grounds:
 		grounds.update(replay_time)
 
-	_update_camera(delta)
+	if cinema.on:
+		cinema.update(delta)
+	else:
+		_update_camera(delta)
 	_draw_vectors(vector_items, size)
 	ui.refresh(replay_time, playing, playback_speed, play_direction)
 	ui.set_info(_info_text())
@@ -722,10 +755,10 @@ func _update_camera(delta):
 			camera.position = Vector3(p.x, TOP_HEIGHT, p.z)
 		else:
 			var move := Vector3.ZERO           # north is up on the screen (-z)
-			if Input.is_key_pressed(KEY_W): move.z -= 1.0
-			if Input.is_key_pressed(KEY_S): move.z += 1.0
-			if Input.is_key_pressed(KEY_A): move.x -= 1.0
-			if Input.is_key_pressed(KEY_D): move.x += 1.0
+			if keys.held("move_forward"): move.z -= 1.0
+			if keys.held("move_back"): move.z += 1.0
+			if keys.held("move_left"): move.x -= 1.0
+			if keys.held("move_right"): move.x += 1.0
 			var pace := camera.size * (1.8 if Input.is_key_pressed(KEY_SHIFT) else 0.6)
 			camera.position += move.normalized() * pace * delta
 		camera.rotation = Vector3(-PI / 2.0, 0.0, 0.0)
@@ -741,12 +774,12 @@ func _update_camera(delta):
 		camera.rotation = Vector3(cam_rot_x, cam_rot_y, 0)
 
 		var dir = Vector3.ZERO
-		if Input.is_key_pressed(KEY_W): dir -= camera.global_transform.basis.z
-		if Input.is_key_pressed(KEY_S): dir += camera.global_transform.basis.z
-		if Input.is_key_pressed(KEY_A): dir -= camera.global_transform.basis.x
-		if Input.is_key_pressed(KEY_D): dir += camera.global_transform.basis.x
-		if Input.is_key_pressed(KEY_E): dir += Vector3.UP
-		if Input.is_key_pressed(KEY_Q): dir += Vector3.DOWN
+		if keys.held("move_forward"): dir -= camera.global_transform.basis.z
+		if keys.held("move_back"): dir += camera.global_transform.basis.z
+		if keys.held("move_left"): dir -= camera.global_transform.basis.x
+		if keys.held("move_right"): dir += camera.global_transform.basis.x
+		if keys.held("move_up"): dir += Vector3.UP
+		if keys.held("move_down"): dir += Vector3.DOWN
 
 		var current_speed = move_speed
 		if Input.is_key_pressed(KEY_SHIFT):
@@ -832,6 +865,8 @@ func seek(t):
 	replay_time = clamp(t, t_min, t_max)
 	for air_id in telemetry_data:
 		current_frame_indices[air_id] = frame_index_at(telemetry_data[air_id], replay_time)
+	if cinema.on:
+		cinema.cut()
 	ui.refresh(replay_time, playing, playback_speed, play_direction)   # (its clock is "now" for N / C)
 
 # Index of the last frame at or before time t (0 if t is before the first frame).
@@ -854,6 +889,35 @@ static func _pos_at(frames, t) -> Vector3:
 	var gap = f2["t"] - f1["t"]
 	var w = clamp((t - f1["t"]) / gap, 0.0, 1.0) if gap > 0 else 0.0
 	return ys_position(f1).lerp(ys_position(f2), w)
+
+# The position on a track between samples i and i + 1 (w: 0..1 between them) on a smooth curve
+# through the samples (cubic Hermite; the slopes from the samples either side), so an aircraft
+# moves without the small kinks at each sample that show in slow motion and close up.
+static func _smooth(frames: Array, i: int, w: float) -> Vector3:
+	var n := frames.size()
+	var f1: Dictionary = frames[i]
+	var f2: Dictionary = frames[mini(i + 1, n - 1)]
+	var p1 := ys_position(f1)
+	var p2 := ys_position(f2)
+	var h: float = f2["t"] - f1["t"]
+	if h <= 0.0:
+		return p1
+	var f0: Dictionary = frames[maxi(i - 1, 0)]
+	var f3: Dictionary = frames[mini(i + 2, n - 1)]
+	var m1 := (p2 - ys_position(f0)) / maxf(float(f2["t"]) - float(f0["t"]), 0.001) * h
+	var m2 := (ys_position(f3) - p1) / maxf(float(f3["t"]) - float(f1["t"]), 0.001) * h
+	var w2 := w * w
+	var w3 := w2 * w
+	return p1 * (2.0 * w3 - 3.0 * w2 + 1.0) + m1 * (w3 - 2.0 * w2 + w) + p2 * (3.0 * w2 - 2.0 * w3) + m2 * (w3 - w2)
+
+# An aircraft's position at any time t, on that smooth curve (held at the ends).
+func track_pos(id: String, t: float) -> Vector3:
+	var frames: Array = telemetry_data[id]
+	var i := frame_index_at(frames, t)
+	var f1: Dictionary = frames[i]
+	var f2: Dictionary = frames[mini(i + 1, frames.size() - 1)]
+	var gap: float = f2["t"] - f1["t"]
+	return _smooth(frames, i, clampf((t - f1["t"]) / gap, 0.0, 1.0) if gap > 0.0 else 0.0)
 
 # Velocity (m/s) around track sample idx: the move from two samples before it to three after
 # (about 0.25 s at 20 samples a second), over the time between them.
@@ -959,19 +1023,24 @@ func _on_view_changed(key: String, value) -> void:
 		_rebuild_models()
 	_apply_view()
 
+# (the cinematic mode hides the name tags, vectors, ribbons, black smoke ribbons, rings, and in
+# combat_layer.gd the trails, tethers, markers and kill feed: the world only)
 func _apply_view() -> void:
+	var cine: bool = cinema.on
 	for id in aircraft_tags:
 		aircraft_tags[id].pixel_size = TAG_PIXEL * view["text_scale"]
-		aircraft_tags[id].visible = view["tags"]
-	vector_node.visible = view["vectors"]
+		aircraft_tags[id].visible = view["tags"] and not cine
+	vector_node.visible = view["vectors"] and not cine
 	if combat:
 		combat.set_view(view)
+		combat.set_cinema(cine)
 	if ribbons:
-		ribbons.set_view(view["ribbons"], view["trail_seconds"], view["ribbon_width"], view["smoke"])
+		ribbons.set_view(view["ribbons"] and not cine, view["trail_seconds"], view["ribbon_width"],
+			view["smoke"] and not cine)
 	if grounds:
 		grounds.visible = view["ground"]
 		grounds.show_clouds(view["clouds"])
-		grounds.show_ranges(view["ranges"])
+		grounds.show_ranges(view["ranges"] and not cine)
 	_apply_lighting(view["lighting"])
 	get_tree().call_group("aircraft_shadow", "set_visible", view["shadows"])
 
@@ -1027,20 +1096,75 @@ func _on_ground_chosen(index: int, t: float) -> void:
 	cam_rot_x = asin(d.y)
 	cam_rot_y = atan2(-d.x, -d.z)
 
+# --- CINEMATIC MODE, KEYS, FULL SCREEN ---
+
+# The cinematic mode (cinema.gd) on or off: the side panel, bars, tags, lines and markers hidden
+# (put back when it goes off). Only with an event loaded; it leaves the top view.
+func set_cinema(on: bool) -> void:
+	if on == cinema.on:
+		return
+	if on and (event_data == null or ui.start_menu.visible):
+		return
+	if on:
+		set_top_view(false)
+		if tracked_id == "" or not active_aircraft[tracked_id].visible:
+			var near := ""
+			var near_d := INF
+			for id in _in_air_now():                 # the aircraft nearest the camera
+				var d: float = active_aircraft[id].position.distance_to(camera.global_position)
+				if d < near_d:
+					near = id
+					near_d = d
+			if near != "":
+				follow(near)
+		cinema.enter()
+	else:
+		cinema.leave()
+		var e := camera.global_transform.basis.get_euler()   # the free / follow camera from here
+		cam_rot_x = clampf(e.x, -1.5, 1.5)
+		cam_rot_y = e.y
+	ui.visible = not on
+	_apply_view()
+
+func toggle_fullscreen() -> void:
+	var w := get_window()
+	if w.mode == Window.MODE_FULLSCREEN or w.mode == Window.MODE_EXCLUSIVE_FULLSCREEN:
+		w.mode = Window.MODE_MAXIMIZED
+	else:
+		w.mode = Window.MODE_FULLSCREEN
+
+func _on_key_chosen(action: String, keycode: int) -> void:
+	keys.keys[action] = keycode
+	_set_setting("key_" + action, keycode)
+	ui.show_keys()
+
+func _on_keys_reset() -> void:
+	keys.reset()
+	for a in Keys.ACTIONS:
+		_set_setting("key_" + a[0], a[2])
+	ui.show_keys()
+
 func _in_air_now() -> Array:
 	return order.filter(func(id): return active_aircraft[id].visible)
 
 func _info_text() -> String:
 	if event_data == null:
 		return ""
-	var hint := "Zoom %d m  |  Tab: Next aircraft  |  Esc: Free camera  |  Click an aircraft to follow it" % cam_distance
+	var k = keys
+	var hint := "Zoom %d m  |  %s: Next aircraft  |  %s: Free camera  |  Click: Follow  |  %s: Cinematic" % [
+		cam_distance, k.short_name("next_aircraft"), k.short_name("free"), k.short_name("cinema")]
 	if top_view:
-		hint = "Top view %.1f km  |  Wheel: Zoom  |  Tab: Next  |  Esc: Stop following  |  T: 3D" % (camera.size / 1000.0)
+		hint = "Top view %.1f km  |  Wheel: Zoom  |  %s: Next  |  %s: Stop following  |  %s: 3D" % [camera.size / 1000.0,
+			k.short_name("next_aircraft"), k.short_name("free"), k.short_name("top")]
 	if tracked_id == "":
 		if top_view:
-			return "Top view %.1f km  |  WASD / Right-drag: Move  |  Wheel: Zoom  |  Click: Follow  |  T: 3D" \
-				% (camera.size / 1000.0)
-		return "Free camera (WASD, E/Q, Shift)  |  Tab or click an aircraft to follow it  |  T: Top view"
+			return "Top view %.1f km  |  %s%s%s%s / Right-drag: Move  |  Wheel: Zoom  |  Click: Follow  |  %s: 3D" % [
+				camera.size / 1000.0, k.short_name("move_forward"), k.short_name("move_left"), k.short_name("move_back"),
+				k.short_name("move_right"), k.short_name("top")]
+		return "Free camera (%s%s%s%s, %s/%s, Shift)  |  %s or click an aircraft to follow it  |  %s: Top view  |  %s: Cinematic" % [
+			k.short_name("move_forward"), k.short_name("move_left"), k.short_name("move_back"), k.short_name("move_right"),
+			k.short_name("move_up"), k.short_name("move_down"), k.short_name("next_aircraft"), k.short_name("top"),
+			k.short_name("cinema")]
 	var e = event_data["entities"][tracked_id]
 	var frames = telemetry_data[tracked_id]
 	var iff := int(e.get("iff", 0))
@@ -1107,48 +1231,56 @@ func _input(event):
 			focus.release_focus()
 		get_viewport().set_input_as_handled()
 
-# A shortcut key; false if it isn't one.
+# A shortcut key (keys.gd says which action it is); false if it isn't one. Held keys (moving the
+# camera, the cinematic mode's slow motion and snap zoom) are read where they are used.
 func _key(event: InputEventKey) -> bool:
-	if event.keycode == KEY_TAB:
-		if not ui.start_menu.visible:
+	var action: String = keys.action_of(event.keycode, cinema.on)
+	if action == "" or action.begins_with("move_"):
+		return false
+	if cinema.on and cinema.key(action, event.shift_pressed):
+		return true
+	match action:
+		"next_aircraft":
 			var ids := _in_air_now()
 			if ids.size() > 0:
 				var i := ids.find(tracked_id)
 				follow(ids[posmod(i + (-1 if event.shift_pressed else 1), ids.size())])
-		return true
-	match event.keycode:
-		KEY_ESCAPE:
+		"free":
 			tracked_id = ""
-		KEY_P:
+		"panel":
 			ui.toggle_panel()
-		KEY_T:
+		"top":
 			set_top_view(not top_view)
-		KEY_SPACE:
+		"cinema":
+			set_cinema(not cinema.on)
+		"fullscreen":
+			toggle_fullscreen()
+		"play":
 			set_playing(not playing)
-		KEY_J:
+		"rewind":
 			rewind()
-		KEY_K:
+		"pause":
 			set_playing(false)
-		KEY_L:
+		"fast":
 			fast_forward()
-		KEY_COMMA:
+		"frame_back":
 			frame_step(-1, event.shift_pressed)
-		KEY_PERIOD:
+		"frame_forward":
 			frame_step(1, event.shift_pressed)
-		KEY_LEFT:
+		"back":
 			seek(replay_time - (60.0 if event.shift_pressed else 10.0))
-		KEY_RIGHT:
+		"forward":
 			seek(replay_time + (60.0 if event.shift_pressed else 10.0))
-		KEY_HOME:
+		"restart":
 			restart()
-		KEY_N:
+		"next_kill":
 			ui.jump_kill(-1 if event.shift_pressed else 1)
-		KEY_C:
+		"next_check":
 			ui.jump_check(-1 if event.shift_pressed else 1)
-		KEY_EQUAL, KEY_PLUS, KEY_KP_ADD:
+		"faster":
 			playback_speed = min(playback_speed * 2.0, 512.0)
 			ui.show_speed(playback_speed)
-		KEY_MINUS, KEY_KP_SUBTRACT:
+		"slower":
 			playback_speed = max(playback_speed / 2.0, 0.01)
 			ui.show_speed(playback_speed)
 		_:
@@ -1156,6 +1288,9 @@ func _key(event: InputEventKey) -> bool:
 	return true
 
 func _unhandled_input(event):
+	if cinema.on:
+		cinema.mouse(event)
+		return
 	if event is InputEventMouseButton and event.pressed:
 		get_viewport().gui_release_focus()     # a click in the 3D view leaves any list or text box
 	if event is InputEventMouseButton and event.pressed:

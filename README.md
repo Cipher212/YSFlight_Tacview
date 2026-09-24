@@ -36,7 +36,8 @@ gathers the angles; scorers decide.
    Space play/pause, J / K / L rewind / pause / fast, `,` `.` frame back / forward (Shift: 1 s),
    Left / Right 10 s (Shift: 60 s), N / Shift+N next / previous kill, C / Shift+C next / previous
    kill or death still to review, Tab next aircraft, Esc free camera, P side panel, **T top
-   view** (the map from straight above: WASD or right-drag to move, wheel to zoom). Click an
+   view** (the map from straight above: WASD or right-drag to move, wheel to zoom), **M
+   cinematic mode** (below), F11 full screen; View tab > Keys... changes them. Click an
    aircraft to follow it; right-drag to look around; mouse wheel to zoom. Name tags show the
    pilot, health (`Health 35/40`), aircraft, height and speed.
 4. **Side panel:** Find (pilot names or words) and Show (all, still to review, confirmed ...)
@@ -72,6 +73,38 @@ aircraft, the ground). Better lighting (View tab, on at first) shades the hills 
 and makes the aircraft shinier, shading themselves; turn it off for YSFlight's flat daylight or
 if the replay runs slowly.
 
+## Cinematic mode (for videos)
+
+**M** (or the **Cinematic** button on the top bar) hides everything but the world: no panels,
+name tags, lines or markers, and no mouse pointer, for recording with OBS. **M** or **Esc**
+brings it all back, **F11** is full screen, **F1** lists its keys. In it, missiles leave white
+smoke, explosions flash, burn and smoke, and aircraft going down burn and trail black smoke (a
+wreck on the ground keeps smoking): YSFlight's look, done better. Everything follows the
+replay's clock, so it slows down, freezes and runs backwards with it. Aircraft move along a
+smooth curve through the recorded positions and are always drawn at true size.
+
+| Key | Shot |
+|---|---|
+| 1 | **Chase**: behind the aircraft, swinging out in turns. H: level horizon or rolling with it |
+| 2 | **Wingman**: beside it, keeping level (it doesn't copy the aircraft's pitch and roll) |
+| 3 | **Flyby**: waits just off the aircraft's path ahead, whips round as it roars past |
+| 4 | **Ground camera**: stays where the camera is (fly there with 9 first; on a moving ship it rides along) and pans after the aircraft, zooming like a long lens |
+| 5 | **Orbit**: circles the aircraft (it keeps circling when paused) |
+| 6 | **Weapon**: rides behind the next missile or bomb the aircraft fires, to the end |
+| 7 | **Lock-on**: over the aircraft's shoulder with its target ahead (R: the next target) |
+| 8 | **Crane**: glides through 2 to 6 points set with K, easing in and out |
+| 9 | **Drone**: a free camera with weight (WASD, E/Q, Shift = fast) |
+
+Every shot: Tab picks the aircraft; mouse wheel closer / further, **Ctrl+wheel** zoom,
+**Alt+wheel** background blur (focused on the aircraft), right-drag the angle; hold **Z** for a
+snap zoom, hold **X** for slow motion (it eases in and out); **Space** pauses (easing to a stop;
+orbit, crane and drone keep moving); **Backspace** is a retake from where Play was last
+pressed. The camera shakes with the G the aircraft pulls, aircraft rushing past and explosions
+nearby (View tab: Camera shake). The View tab also sets the slow motion speed, orbit speed and
+crane move time, and **Keys...** changes any key (click it, press the new one).
+
+![Cinematic mode](docs/cinematic_preview.jpg)
+
 ## Folders
 
 | Folder | What | In the repository |
@@ -82,7 +115,7 @@ if the replay runs slowly.
 | `gamefiles/` | RvB game files: map (`.fld`), ground objects, scenery lists | yes |
 | `maps/` | maps built from `.fld` files (made automatically) | yes |
 | `YSFLIGHT-master/` | YSFlight's source (reference; stock ground objects and weapons) | yes |
-| `docs/` | reference lists (e.g. Luavi's ground objects) | yes |
+| `docs/` | reference lists (e.g. Luavi's ground objects), release notes | yes |
 | `tools/` | making the Windows package; a made-up test replay and viewer tests | yes |
 | `Raw_Data/` | the replays (`.yfs`) | no (too big) |
 | `events/` | built events (`.json.gz`) and their review files | no (too big; rebuild them) |

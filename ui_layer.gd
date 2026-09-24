@@ -31,6 +31,9 @@ signal ground_chosen(index: int, t: float)
 signal layout_changed
 signal panel_toggled(shown: bool)
 signal top_view_toggled
+signal cinema_pressed
+signal key_chosen(action: String, keycode: int)
+signal keys_reset
 
 const Main = preload("res://node_3d.gd")
 const Fmt = preload("res://fmt.gd")
@@ -69,6 +72,17 @@ const VIEW_SWITCHES = [
 	["lighting", "Better lighting: hills shaded by a lower sun, shinier aircraft (off: YSFlight's flat daylight)"],
 	["shadows", "Aircraft shadows on the ground (straight below, as in YSFlight)"],
 	["blocky", "Blocky placeholder aircraft instead of the game models (faster)"]]
+# the cinematic mode's settings (View tab), as the sliders above
+const CINEMA_SLIDERS = [
+	["cine_shake", "Camera shake", 0.0, 3.0, false, "%.2fx"],
+	["cine_slow", "Slow motion", 0.05, 0.5, false, "%.2fx"],
+	["cine_orbit", "Orbit speed", 0.0, 60.0, false, "%d deg/s"],
+	["cine_crane", "Crane move", 1.0, 30.0, false, "%.1f s"]]
+const CINEMA_HELP = "Cinematic mode (M): everything but the world hidden, for recording with OBS. " + \
+	"Keys 1-9 pick the shot: 1 Chase, 2 Wingman, 3 Flyby, 4 Ground camera, 5 Orbit, 6 Weapon, " + \
+	"7 Lock-on, 8 Crane (points set with K), 9 Drone. Wheel: closer / further, Ctrl+wheel: zoom, " + \
+	"Alt+wheel: background blur, right-drag: angle, hold Z: snap zoom, hold X: slow motion, " + \
+	"Backspace: retake, F1: all its keys, M or Esc: back."
 const TRAIL_HELP = "Weapon trails, in the shooter's team colour: solid line = air-to-air missile, " + \
 	"dashed = air-to-ground missile, dots = bomb (grey dots: a dropped fuel tank), short streak = " + \
 	"rocket, short thin lines = gun rounds."
@@ -86,6 +100,12 @@ var play_state: Label
 var notice: Label
 var panel_button: Button
 var top_button: Button
+var cinema_button: Button
+var keys                  # keys.gd of the viewer (the user's keys)
+var keys_window: Window
+var keys_grid: GridContainer
+var _key_buttons := {}    # action -> its Button in the Keys window
+var capturing := ""       # the action waiting for a key in the Keys window
 var speed_menu: OptionButton
 var speed_edit: LineEdit
 var jump_edit: LineEdit
@@ -357,6 +377,8 @@ func _build_top(root: Control) -> void:
 	panel_button = _button(row, "Hide panel", toggle_panel)
 	top_button = _tip(_button(row, "Top view (T)", top_view_toggled.emit),
 		"The map from straight above: WASD or right-drag to move, mouse wheel to zoom, T to go back") as Button
+	cinema_button = _tip(_button(row, "Cinematic (M)", cinema_pressed.emit),
+		"Everything but the world hidden, film-style cameras (keys 1-9); F1 in it lists its keys, M or Esc to come back") as Button
 	row.add_child(VSeparator.new())
 	_tip(_button(row, "Start / Restart", restart.emit), "Play the replay from the beginning (Home)")
 	row.add_child(_label("Jump to:"))
@@ -537,26 +559,7 @@ func _build_view(tabs_node: TabContainer) -> void:
 	head.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(head)
 	for s in VIEW_SLIDERS:
-		var row := HBoxContainer.new()
-		v.add_child(row)
-		var name_label := _label(s[1])
-		name_label.custom_minimum_size.x = 120
-		row.add_child(name_label)
-		var view_slider := HSlider.new()
-		view_slider.min_value = s[2]
-		view_slider.max_value = s[3]
-		view_slider.exp_edit = s[4]
-		view_slider.step = 0.05 if s[3] <= 50.0 else 1.0
-		view_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		view_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		view_slider.focus_mode = Control.FOCUS_NONE
-		view_slider.value_changed.connect(_on_view_slider.bind(s[0]))
-		row.add_child(view_slider)
-		var value := _label("")
-		value.custom_minimum_size.x = 56
-		row.add_child(value)
-		view_controls[s[0]] = view_slider
-		view_values[s[0]] = value
+		_view_slider_row(v, s)
 	v.add_child(HSeparator.new())
 	v.add_child(_label("Show"))
 	for s in VIEW_SWITCHES:
@@ -571,6 +574,38 @@ func _build_view(tabs_node: TabContainer) -> void:
 	var help := _label(TRAIL_HELP)
 	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(help)
+	v.add_child(HSeparator.new())
+	var cine := _label(CINEMA_HELP)
+	cine.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	v.add_child(cine)
+	for s in CINEMA_SLIDERS:
+		_view_slider_row(v, s)
+	var buttons := HBoxContainer.new()
+	v.add_child(buttons)
+	_button(buttons, "Start cinematic mode", cinema_pressed.emit)
+	_tip(_button(buttons, "Keys...", show_keys_window), "Change which key does what")
+
+func _view_slider_row(v: VBoxContainer, s: Array) -> void:
+	var row := HBoxContainer.new()
+	v.add_child(row)
+	var name_label := _label(s[1])
+	name_label.custom_minimum_size.x = 120
+	row.add_child(name_label)
+	var view_slider := HSlider.new()
+	view_slider.min_value = s[2]
+	view_slider.max_value = s[3]
+	view_slider.exp_edit = s[4]
+	view_slider.step = 0.05 if s[3] <= 50.0 else 1.0
+	view_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	view_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	view_slider.focus_mode = Control.FOCUS_NONE
+	view_slider.value_changed.connect(_on_view_slider.bind(s[0]))
+	row.add_child(view_slider)
+	var value := _label("")
+	value.custom_minimum_size.x = 76
+	row.add_child(value)
+	view_controls[s[0]] = view_slider
+	view_values[s[0]] = value
 
 func _build_start_menu(root: Control) -> void:
 	start_menu = CenterContainer.new()
@@ -690,6 +725,7 @@ func _build_dialogs() -> void:
 	fld_dialog.current_dir = Paths.of("gamefiles")
 	fld_dialog.file_selected.connect(_on_fld_picked)
 	add_child(fld_dialog)
+	_build_keys_window()
 
 func _layout() -> void:
 	# the side panel sits between the bars; the info text just above the bottom bar
@@ -1474,12 +1510,12 @@ func _on_view_slider(value: float, key: String) -> void:
 	view_changed.emit(key, value)
 
 func _show_view_value(key: String, value: float) -> void:
-	for s in VIEW_SLIDERS:
+	for s in VIEW_SLIDERS + CINEMA_SLIDERS:
 		if s[0] == key:
 			view_values[key].text = s[5] % value
 
 func show_top_view(on: bool) -> void:
-	top_button.text = "3D view (T)" if on else "Top view (T)"
+	top_button.text = ("3D view (%s)" if on else "Top view (%s)") % keys.short_name("top")
 
 func toggle_panel() -> void:
 	set_panel_visible(not side_panel.visible)
@@ -1487,7 +1523,7 @@ func toggle_panel() -> void:
 
 func set_panel_visible(shown: bool) -> void:
 	side_panel.visible = shown
-	panel_button.text = "Hide panel (P)" if shown else "Show panel (P)"
+	panel_button.text = ("Hide panel (%s)" if shown else "Show panel (%s)") % keys.short_name("panel")
 	_layout()
 
 func _back_10() -> void:
@@ -1595,3 +1631,97 @@ static func _players_first(a: String, b: String) -> bool:
 
 static func _speed_text(s: float) -> String:
 	return ("%sx" % str(s)).replace(".0x", "x")
+
+# --- Keys window (View tab > Keys...) ---
+
+# Every shortcut with its key: click the key, then press the new one (Esc: keep the old one).
+# Keys that clash (one of them can't be reached) show in orange. Saved at once (settings.cfg).
+func _build_keys_window() -> void:
+	keys_window = Window.new()
+	keys_window.title = "Keys"
+	keys_window.visible = false
+	keys_window.transient = true
+	keys_window.exclusive = true
+	keys_window.wrap_controls = true
+	keys_window.close_requested.connect(_close_keys_window)
+	keys_window.window_input.connect(_on_keys_window_input)
+	add_child(keys_window)
+	var margin := MarginContainer.new()
+	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	for side in ["left", "right", "top", "bottom"]:
+		margin.add_theme_constant_override("margin_" + side, 10)
+	keys_window.add_child(margin)
+	var col := VBoxContainer.new()
+	margin.add_child(col)
+	var head := _label("Click a key, then press the key you want for it (Esc: keep the old one). " +
+		"Orange: two things on one key where both work (one of them can't be reached).")
+	head.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	head.custom_minimum_size.x = 560
+	col.add_child(head)
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(560, 520)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	col.add_child(scroll)
+	keys_grid = GridContainer.new()
+	keys_grid.columns = 2
+	keys_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(keys_grid)
+	var last_where := ""
+	for a in keys.ACTIONS:
+		var where: String = "Cinematic mode only" if a[3] == "cinema" else ""
+		if where != last_where:
+			keys_grid.add_child(_label(where))
+			keys_grid.add_child(_label(""))
+			last_where = where
+		var l := _label(a[1] + ("  (not in the cinematic mode)" if a[3] == "viewer" else ""))
+		l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		keys_grid.add_child(l)
+		var b := _button(keys_grid, "", _capture_key.bind(a[0]))
+		b.custom_minimum_size.x = 150
+		_key_buttons[a[0]] = b
+	var row := HBoxContainer.new()
+	col.add_child(row)
+	_button(row, "All back to the defaults", keys_reset.emit)
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(spacer)
+	_button(row, "Close", _close_keys_window)
+
+func show_keys_window() -> void:
+	show_keys()
+	keys_window.popup_centered()
+
+func _close_keys_window() -> void:
+	capturing = ""
+	keys_window.hide()
+
+# Shows every action's key (and the buttons that name keys).
+func show_keys() -> void:
+	for action in _key_buttons:
+		var b: Button = _key_buttons[action]
+		b.text = "Press a key..." if action == capturing else keys.key_name(action)
+		var clash: Array = keys.clashes(action)
+		b.tooltip_text = "" if clash.is_empty() else "Also: " + ", ".join(clash.map(func(x): return keys.label_of(x)))
+		b.add_theme_color_override("font_color", CHECK_COLOR if not clash.is_empty() else Color.WHITE)
+	if cinema_button != null:
+		cinema_button.text = "Cinematic (%s)" % keys.short_name("cinema")
+		show_top_view(top_button.text.begins_with("3D"))
+		set_panel_visible(side_panel.visible)
+
+func _capture_key(action: String) -> void:
+	capturing = action
+	show_keys()
+
+func _on_keys_window_input(event: InputEvent) -> void:
+	if capturing == "" or not (event is InputEventKey and event.pressed and not event.echo):
+		return
+	keys_window.set_input_as_handled()
+	var action := capturing
+	capturing = ""
+	if event.keycode in [KEY_SHIFT, KEY_CTRL, KEY_ALT, KEY_META]:
+		capturing = action                # Shift etc. can't be a shortcut (Shift changes some)
+		return
+	if event.keycode == KEY_ESCAPE:
+		show_keys()
+		return
+	key_chosen.emit(action, event.keycode)

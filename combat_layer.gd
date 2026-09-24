@@ -100,6 +100,9 @@ var last_line_vertices = 0   # line vertices drawn last update (for performance 
 
 var weapon_scale := 1.0
 var text_scale := 1.0
+var cinema := false          # cinematic mode (cinema.gd): only the weapons themselves, as in the game
+var feed_layer: CanvasLayer
+var fire_node: MultiMeshInstance3D
 var show_tethers := true
 var show_markers := true
 var marker_seconds := 30.0
@@ -267,6 +270,31 @@ func set_view(view: Dictionary) -> void:
 	for l in tether_labels:
 		l.pixel_size = TETHER_PIXEL * text_scale
 
+# Cinematic mode on / off: trails (cinema_fx.gd draws smoke instead), tethers, markers,
+# fireballs, kill labels and the kill feed hidden; weapon models in their own colours; gun rounds
+# as YSFlight draws them.
+func set_cinema(on: bool) -> void:
+	cinema = on
+	feed_layer.visible = not on
+	fire_node.visible = not on
+	for l in tether_labels:
+		l.visible = false
+	_end_shown = Vector2i(-1, -1)
+	_kill_shown = Vector2i(-1, -1)
+
+# Where a weapon with a path is at time t, and which way it flies (as drawn here).
+func weapon_head(w: Dictionary, t: float) -> Array:
+	var ts: PackedFloat64Array = w["_ts"]
+	var wp: PackedVector3Array = w["_pts"]
+	var n := wp.size()
+	var k := clampi(ts.bsearch(t, false) - 1, 0, n - 1)
+	if n < 2:
+		return [wp[0] if n > 0 else Vector3.ZERO, Vector3.FORWARD]
+	if k >= n - 1:
+		return [wp[n - 1], (wp[n - 1] - wp[n - 2]).normalized()]
+	var a := clampf((t - ts[k]) / maxf(ts[k + 1] - ts[k], 0.001), 0.0, 1.0)
+	return [wp[k].lerp(wp[k + 1], a), (wp[k + 1] - wp[k]).normalized()]
+
 func update(t: float, aircraft: Dictionary) -> void:
 	var pts = PackedVector3Array()
 	var cols = PackedColorArray()
@@ -274,7 +302,8 @@ func update(t: float, aircraft: Dictionary) -> void:
 	var tethers = []
 	_add_path_weapons(t, pts, cols, tethers, aircraft)
 	_add_shots(t, pts, cols)
-	_add_tethers(pts, cols, tethers)
+	if not cinema:
+		_add_tethers(pts, cols, tethers)
 	last_line_vertices = pts.size()
 	lines.clear_surfaces()
 	if pts.size() > 0:
@@ -310,12 +339,14 @@ func _add_path_weapons(t, pts, cols, tethers, aircraft):
 		var from_t = w["t"] if w["_missile"] else t - (SPARK_TRAIL if w["name"] == "FLARE" else BOMB_TRAIL)
 		var k0 = max(ts.bsearch(from_t) - 1, 0)
 		var k1 = ts.bsearch(t, false) - 1          # last point at or before t
-		for k in range(k0, min(k1, wp.size() - 1)):
-			_trail_seg(pts, cols, wp[k], wp[k + 1], k, style, col)
+		if not cinema:
+			for k in range(k0, min(k1, wp.size() - 1)):
+				_trail_seg(pts, cols, wp[k], wp[k + 1], k, style, col)
 		if t <= end_t and k1 >= 0 and k1 < wp.size() - 1:
 			var a = (t - ts[k1]) / max(ts[k1 + 1] - ts[k1], 0.001)
 			var head = wp[k1].lerp(wp[k1 + 1], a)
-			_trail_seg(pts, cols, wp[k1], head, k1, style, col)
+			if not cinema:
+				_trail_seg(pts, cols, wp[k1], head, k1, style, col)
 			_shape(w["_shape"], head, wp[k1 + 1] - wp[k1], w["_shape_color"])
 			if w["_missile"] and show_tethers:
 				var target = _target_position(w, t, head, aircraft)
@@ -348,7 +379,14 @@ func _add_shots(t, pts, cols):
 				p = shot_pos[i] + d * shot_v0[i] * tau + Vector3(0, -0.5 * GRAVITY * tau * tau, 0) + wind * tau
 				back = (d * shot_v0[i] + Vector3(0, -GRAVITY * tau, 0)).normalized() * TRACER_LEN * maxf(weapon_scale, 1.0)
 			if p.y > 0.0:
-				_seg(pts, cols, p - back, p, shot_color[i])
+				if cinema and shot_kind[i] == 0:   # YSFlight: yellow at the round, white ahead of it
+					var ahead: Vector3 = (d * shot_v0[i] + Vector3(0, -GRAVITY * tau, 0)).normalized() * 10.0
+					pts.append(p)
+					pts.append(p + ahead)
+					cols.append(Color(1.0, 1.0, 0.0))
+					cols.append(Color(1.0, 1.0, 1.0))
+				elif not cinema:
+					_seg(pts, cols, p - back, p, shot_color[i])
 				if shot_kind[i] > 0:
 					_shape(shot_shape[i], p, d, shot_shape_color[i])
 		i += 1
@@ -405,6 +443,12 @@ func _shape(kind: int, pos: Vector3, dir: Vector3, color: Color) -> void:
 	if n >= mm.instance_count:
 		return
 	var basis := Basis.from_scale(Vector3.ONE * weapon_scale)
+	if cinema:                       # true size; models in their own colours
+		basis = Basis.IDENTITY
+		if kind >= Shape.size():
+			color = Color.WHITE
+		elif kind != Shape.FLARE:
+			color = Color(0.8, 0.8, 0.78)
 	if dir.length_squared() > 1e-6:
 		var f := dir.normalized()
 		basis = Basis.looking_at(f, Vector3.BACK if absf(f.y) > 0.999 else Vector3.UP) * basis
@@ -416,7 +460,7 @@ func _shape(kind: int, pos: Vector3, dir: Vector3, color: Color) -> void:
 # only rewritten when that set changes. Returns the set now shown, [first, last + 1).
 func _show_marks(mm: MultiMesh, marks: Array, times: PackedFloat64Array, t: float, size: float,
 		shown: Vector2i) -> Vector2i:
-	var now := Vector2i(times.bsearch(t - marker_seconds), times.bsearch(t, false)) if show_markers \
+	var now := Vector2i(times.bsearch(t - marker_seconds), times.bsearch(t, false)) if show_markers and not cinema \
 		else Vector2i.ZERO
 	if now == shown:
 		return shown
@@ -446,7 +490,7 @@ func _update_kills(t):
 	var recent = []
 	for k in kills:
 		var age = t - k["t"]
-		k["mark"].visible = age >= 0.0 and age <= MARK_TIME
+		k["mark"].visible = age >= 0.0 and age <= MARK_TIME and not cinema
 		if age >= 0.0 and age <= FEED_TIME:
 			recent.push_front(k["text"])
 	var text = "[right][b]REPLAY  %s[/b]" % _clock(t)
@@ -487,7 +531,7 @@ func _build_nodes():
 	fire_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	fire_material.vertex_color_use_as_albedo = true
 	fire_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	var fire_node = MultiMeshInstance3D.new()
+	fire_node = MultiMeshInstance3D.new()
 	fire_node.multimesh = fireballs
 	fire_node.material_override = fire_material
 	add_child(fire_node)
@@ -540,6 +584,7 @@ func _build_nodes():
 	crosses = _multimesh(st.commit(), _instance_material(true), 0)
 
 	var canvas = CanvasLayer.new()
+	feed_layer = canvas
 	add_child(canvas)
 	feed = RichTextLabel.new()
 	feed.bbcode_enabled = true

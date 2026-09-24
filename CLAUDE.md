@@ -60,7 +60,9 @@ from `destroyed_t`; SAM / AAA range rings), `map_layer.gd` (the map, and its rel
 for better lighting; `ground_at(x, z)` = height and slope of the ground under a point, for the
 shadows), `dnm_model.gd` (YSFlight `.dnm`/`.srf` models, cached in
 `user://model_cache`, parsed on WorkerThreadPool), `event_builder.gd`, `fmt.gd`, `ys_air.gd`,
-`paths.gd` (where the data folders are). Settings (last event, panel, `view_*`) live in
+`paths.gd` (where the data folders are), `keys.gd` (every shortcut by name, the user's own keys),
+`cinema.gd` (cinematic mode: shots, lens, shake, eased time) and `cinema_fx.gd` (its smoke,
+explosions, burning aircraft). Settings (last event, panel, `view_*`, `key_*`) live in
 `user://settings.cfg`: the user's own; tests must not write it.
 
 ## Conventions and facts (verified; don't re-litigate)
@@ -172,7 +174,39 @@ shadows), `dnm_model.gd` (YSFlight `.dnm`/`.srf` models, cached in
 - Keys (user request): the viewer takes keys in `_input`, before the side panel: Tab only ever
   switches aircraft (never moves the keyboard focus), shortcuts work whatever list or switch was
   clicked last; only while a text box is typed in do keys go to it (Tab / Esc leave it); a
-  click in the 3D view drops the focus.
+  click in the 3D view drops the focus. Every key is an action in `keys.gd` (name, label,
+  default, where: "both" / "viewer" / "cinema"; in the cinematic mode its own actions come first,
+  so K = pause outside it and a crane point in it); View tab > Keys... rebinds them (saved as
+  `key_<action>`; orange = a clash). Held keys (WASD/E/Q, X, Z) are read with `keys.held()`.
+  Hints and button labels use `keys.short_name()` (Esc, not Escape).
+- Cinematic mode (user request, for their YouTube RvB / 9M videos: fast short cuts to music, ground
+  telephoto, chase, flybys, bomb padlock, slow motion, "shots you could never get in YSFlight"):
+  M hides `ui` (the CanvasLayer), tags, vectors, ribbons, rings and in `combat_layer.set_cinema`
+  the trails, tethers, markers, fireballs, kill labels and feed; weapon models untinted at true
+  size, gun rounds YSFlight-style (yellow -> white, 10 m ahead); aircraft true size; mouse hidden;
+  positions on a cubic Hermite through the samples (`node_3d._smooth`, `track_pos`), only there.
+  Shots 1-9 as in `cinema.gd`'s header (chase with H level/roll, wingman, flyby placed at the
+  track 2.5 s ahead, ground cam parked where the camera was with an auto long lens and riding a
+  moving ground object within 300 m, orbit, weapon cam, lock-on with R, crane through K points
+  - relative to the aircraft's heading if set while following it - and drone). Lens: wheel,
+  Ctrl+wheel FOV, Alt+wheel DOF (CameraAttributesPractical focused on the subject), hold Z snap
+  zoom 3x, hold X slow motion (View "Slow motion", eased), Space eases to a stop, Backspace
+  retake (`note_play` when Play starts), F11 full screen, F1 key list. Follow cameras ease on the
+  replay's clock (the same lag in slow motion), mouse / orbit / crane / drone on the real one.
+  Shake: trauma from explosions (900 m), G (chase / wingman / lock-on), aircraft rushing past
+  within 250 m, times View "Camera shake"; noise on the replay clock. Day/night: not yet (the
+  user: RvB has dynamic day/night now; that is for v2.0).
+- Cinematic effects (user: "match the YSFlight style but better"; YS explosions are a black dome
+  going red to black, burning is square sprites, OGL 2.0 smoke is acceptable): all from the
+  replay time (scrub, reverse, freeze). Smoke trails of missiles (6 s), flares (4.5 s, red at
+  first) and rockets (2 s): per weapon a cached strip (each path point twice, direction in
+  NORMAL, birth time in UV2), sliced per frame, spread to face the camera in the shader. Particles
+  (flash, fire, smoke, spark, glow, spray): one MultiMesh of quads whose instance transform
+  columns carry speed / sizes+life / drag+rise+kind and custom (birth, seed, spin, stretch or
+  ground height); made once per explosion (`explosions`, type 1 = water) or final tumble (fire +
+  black smoke every 4.5 m, a wreck column if it ended < 40 m above the ground), cut by time.
+  Puffs stay above their ground height and fade where they would go under it. An OmniLight
+  flashes at the newest explosion.
 - Look (user requests): the font is ACES07 (`fonts/ACES07_Regular.ttf`, the project's
   `gui/theme/custom_font`; it reaches Label3Ds too; it has no "…" or dashes: Godot falls back);
   UI words start with a capital ("Throttle", "Health 35/40", "Gear up", "Not reviewed yet",
@@ -237,7 +271,10 @@ private: other scorers need to be collaborators to download, or the user shares 
   alone -> 3 of 4. `tools/test_viewer.gd` (headless, TEST_EVENT=...) checks models, trails,
   markers, ribbons, lists, jumps, the review file, ground objects, shadows, the Ground tab,
   health tags, damage log, crash finder, rings, top view, lighting and the folder pick;
-  `tools/test_shots.gd` takes screenshots under `xvfb-run`. The
+  `tools/test_shots.gd` takes screenshots under `xvfb-run`, `tools/test_cinema_shots.gd` the
+  cinematic mode's (ONLY=a..g picks parts); test_viewer also checks the cinematic mode (hiding,
+  shot distances, lock-on, weapon cam, effects, flyby, ground cam, snap zoom, shake, slow motion,
+  pause, retake, crane, rebinding a key in the Keys window). The
   user's renderer (Forward+) runs here on lavapipe: `apt-get install mesa-vulkan-drivers`, then
   `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json xvfb-run -a -s "-screen 0 1920x1080x24"
   godot --path . --rendering-driver vulkan --rendering-method forward_plus --resolution
@@ -267,6 +304,14 @@ private: other scorers need to be collaborators to download, or the user shares 
 - The UI is ~1152 units wide at 1920x1080 (stretch canvas_items): the bottom bar is full; the
   side panel's tab bar fits 7 short titles (with "Messages" the 7th went behind scroll arrows).
 - In `.srf`, `V` lines inside a face (`F` ... `E`) are point numbers, not points.
+- Compatibility (OpenGL) renderer: `blend_premul_alpha` multiplies the colour by alpha again
+  (smoke came out black) and `PREMUL_ALPHA_FACTOR` doesn't compile there; unshaded colours are
+  shown without Forward+'s linear -> sRGB step. `cinema_fx.gd` uses `#if CURRENT_RENDERER ==
+  RENDERER_COMPATIBILITY` (it works, also around `render_mode`) for blend_mix + pow(1/2.2).
+- Camera3D.fov must be 1-179 (errors below 1). Keys in an embedded Window (the Keys window) never
+  reach the main scene's `_input`: its `window_input` signal catches them (works headless too).
+  The map's layers draw in the transparent pass, so a depth texture wouldn't contain the terrain
+  (no soft particles against it).
 - YSFlight has no over-G breakup in its own code (only blackout); RvB's G-limiter is a server rule.
 
 ## Status (2026-09-24) and next steps
@@ -282,17 +327,24 @@ in the sortie details; compressed event files; the Windows package (built by Git
 ground objects destroyed by a rule across replays, and hidden from then on; aircraft shadows;
 Ground tab; health on name tags; damage log; crash finder; SAM / AAA range rings; top view (T);
 better lighting; whole event from a folder; missiles re-flown as the shooter's game saw them;
-v1.0 release workflow and the one-page how-to. Not yet measured on RvB 6 (no replays here): the
-new "reproduced" count (was 91 of 119), the ground-object numbers, the damage logs.
+v1.0 release workflow and the one-page how-to; v1.1 fixes; v1.2 cinematic mode (9 shots, lens,
+shake, eased slow motion / pause, retake, effects) and remappable keys. Not yet measured on RvB 6
+(no replays here): the new "reproduced" count (was 91 of 119), the ground-object numbers, the
+damage logs, and the cinematic effects' frame rate in a big furball (test: 60 explosions, 40
+burning, 400 trails at once = 9 ms a frame; realistic ~1-2 ms).
 
 Agreed next steps, in order:
 1. Deeper evidence, the rest: gun checks in the shooter's world; "ghost" copies of an aircraft
    from each replay and a switch to see a moment as one player's game saw it; lag spikes per
    replay.
-2. Cameras: kill review (frame shooter + victim, slow motion, loop), flight data strip (G, speed,
-   height, throttle), engagement / missile cams, chase and cockpit views, declutter "only who's
-   involved". (The top view is done.)
-3. Later: server-replay master (May 2027).
+2. Cameras for scoring: kill review (frame shooter + victim, slow motion, loop), flight data strip
+   (G, speed, height, throttle), cockpit view, declutter "only who's involved". (Top view done;
+   the cinematic mode has chase, lock-on and missile cams.)
+3. Cinematic phase 2 (agreed): time of day with sunset / dawn silhouettes (v2.0: RvB has dynamic
+   day/night), haze, vapour at high G and airshow smoke (both in the replays: ctrl 7 / 6),
+   framing a formation, letterbox bars; phase 3: frame-perfect offline render (fixed 60 fps
+   whatever the PC), saved camera moves.
+4. Later: server-replay master (May 2027).
 
 ## From the first chat (2026-09-23/24)
 
@@ -350,3 +402,13 @@ Agreed next steps, in order:
   ([RED]Crazy, a UCAV at 1/5 health) - "if it can't be fixed cheaply, remove it" (fixed: only
   the final tumble); Tab only for switching aircraft, never focusing buttons or text boxes; the
   ACES07 font; capitalised UI words. Released as v1.1.
+
+## From the fifth chat (cloud, 2026-09-24)
+
+- The user makes RvB / 9M (their squadron) cinematics for YouTube: fast, short shots cut to
+  music; static ground / deck cams panning, chase, mid-air flybys, bomb padlock, slow sweeping
+  formation pans (WW2), sunset silhouettes, slow motion, telephoto tracking (ISPR parody). They
+  approved the shot list and keys as proposed and asked for remappable keys ("if not too
+  complex") and effects "YSFlight's style but better". Day/night: hold until v2.0.
+- Built as v1.2 (cinematic mode + keys). Not yet tested by them: ask how the shots, effects and
+  frame rate (their PC + OBS) went.

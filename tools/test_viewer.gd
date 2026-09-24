@@ -362,6 +362,154 @@ func _init():
 		DirAccess.remove_absolute(dir.path_join(f))
 	DirAccess.remove_absolute(dir)
 
+	print("cinematic mode:")
+	var cin = main.cinema
+	main.follow(tester_id)
+	main.seek(58.0)
+	main.set_playing(true)
+	await process_frame
+	var m_key := InputEventKey.new()
+	m_key.keycode = KEY_M
+	m_key.pressed = true
+	Input.parse_input_event(m_key)
+	await process_frame
+	await process_frame
+	check(cin.on and not ui.visible, "M: cinematic mode on, the side panel and bars hidden")
+	var tags_hidden := true
+	for id in main.aircraft_tags:
+		tags_hidden = tags_hidden and not main.aircraft_tags[id].visible
+	check(tags_hidden and not main.vector_node.visible and combat.cinema and not combat.feed_layer.visible,
+		"name tags, vectors, trails and kill feed hidden")
+	check(not main.ribbons.get_child(0).visible and not main.ribbons.smoke_node.visible, "ribbons and black smoke ribbons hidden")
+	if DisplayServer.get_name() != "headless":
+		check(Input.mouse_mode == Input.MOUSE_MODE_HIDDEN, "mouse pointer hidden")
+	check(main.keys.action_of(KEY_K, true) == "crane_point" and main.keys.action_of(KEY_K, false) == "pause",
+		"K: a crane point in the cinematic mode, pause outside it")
+	var dists := {}
+	for n in [1, 2, 5, 7]:
+		cin.set_shot(n)
+		for k in 6:
+			await process_frame
+		dists[n] = main.camera.global_position.distance_to(main.active_aircraft[tester_id].position)
+	check(absf(dists[1] - 26.0) < 3.0 and absf(dists[2] - 40.0) < 4.0 and absf(dists[5] - 45.0) < 4.0,
+		"chase %.0f m, wingman %.0f m, orbit %.0f m from the aircraft" % [dists[1], dists[2], dists[5]])
+	check(cin._target != "" and main.event_data["entities"][cin._target]["iff"] != main.event_data["entities"][tester_id]["iff"],
+		"lock-on: an enemy target (%s)" % main.event_data["entities"].get(cin._target, {}).get("player", "none"))
+	main.seek(61.0)
+	cin.set_shot(6)
+	for k in 4:
+		await process_frame
+	check(cin._weapon != null and cin._weapon["name"] == "AIM120" and main.camera.global_position.distance_to(cin._weapon_pos) < 20.0,
+		"weapon camera: rides behind Tester's AIM-120")
+	check(cin.fx.last_trail_vertices > 0 and cin.fx.last_particles > 0, "its smoke trail and motor glow are drawn")
+	main.seek(68.0)
+	await process_frame
+	await process_frame
+	check(cin.fx.last_particles > 40, "the explosion at 1:07: %d particles" % cin.fx.last_particles)
+	cin.set_shot(3)
+	await process_frame
+	await process_frame
+	var spot: Vector3 = cin._spot
+	var future: Vector3 = main.track_pos(tester_id, main.replay_time + cin.FLYBY_LEAD)
+	check(absf(spot.distance_to(future) - cin.reach[3] * sqrt(1.0 + 0.04)) < 2.0,
+		"flyby: the camera waits %.0f m off where the aircraft will be in %.1f s" % [spot.distance_to(future), cin.FLYBY_LEAD])
+	cin.set_shot(4)
+	for k in 4:
+		await process_frame
+	check(main.camera.global_position.distance_to(spot) < 1.0 and main.camera.fov < cin.fov,
+		"ground camera: stays there, zoomed in on the aircraft (%.1f deg)" % main.camera.fov)
+	# snap zoom and shake
+	cin.set_shot(1)
+	await process_frame
+	var fov_before: float = main.camera.fov
+	var z_key := InputEventKey.new()
+	z_key.keycode = KEY_Z
+	z_key.pressed = true
+	Input.parse_input_event(z_key)
+	await create_timer(0.6).timeout
+	check(main.camera.fov < fov_before / 2.5, "hold Z: snap zoom (%.0f -> %.0f deg)" % [fov_before, main.camera.fov])
+	z_key.pressed = false
+	Input.parse_input_event(z_key)
+	var blast: Dictionary = main.event_data["explosions"][0]
+	var bp := Vector3(blast["x"], blast["y"], -blast["z"])
+	cin.set_shot(9)
+	cin._start_drone(Transform3D(Basis.looking_at(Vector3(-1, 0, 0), Vector3.UP), bp + Vector3(150, 20, 0)))
+	main.seek(float(blast["t"]) - 0.3)
+	main.set_playing(true)
+	await create_timer(0.8).timeout
+	check(cin._trauma > 0.1 and not main.camera.global_transform.is_equal_approx(cin.base),
+		"an explosion 150 m away shakes the camera (%.2f)" % cin._trauma)
+	# slow motion, pause and retake
+	main.seek(100.0)
+	main.set_playing(true)
+	cin.note_play()
+	var x_key := InputEventKey.new()
+	x_key.keycode = KEY_X
+	x_key.pressed = true
+	Input.parse_input_event(x_key)
+	await create_timer(1.5).timeout
+	check(absf(cin.rate - 0.25) < 0.02, "hold X: the replay eases down to 0.25x (%.2f)" % cin.rate)
+	x_key.pressed = false
+	Input.parse_input_event(x_key)
+	await create_timer(1.5).timeout
+	check(absf(cin.rate - 1.0) < 0.02, "let go: back to full speed")
+	main.set_playing(false)
+	var t_pause: float = main.replay_time
+	await create_timer(1.5).timeout
+	check(cin.rate == 0.0 and main.replay_time > t_pause and main.replay_time < t_pause + 0.5,
+		"pause: eases to a stop (%.2f s more)" % (main.replay_time - t_pause))
+	cin.set_shot(9)
+	await process_frame
+	var bs := InputEventKey.new()
+	bs.keycode = KEY_BACKSPACE
+	bs.pressed = true
+	Input.parse_input_event(bs)
+	await process_frame
+	check(absf(main.replay_time - 100.0) < 0.2 and main.playing, "Backspace: retake from where Play was pressed (%.2f)" % main.replay_time)
+	# crane
+	main.set_playing(false)
+	cin.rate = 0.0                       # (stopped at once: the points stay where they were set)
+	main.view["cine_crane"] = 1.0
+	cin.set_shot(1)
+	await process_frame
+	await process_frame
+	cin.add_crane_point()
+	var a_pos: Vector3 = cin.base.origin
+	cin.aim[1] = Vector2(1.2, -0.3)
+	for k in 30:
+		await process_frame
+	cin.add_crane_point()
+	var b_pos: Vector3 = cin.base.origin
+	cin.set_shot(8)
+	await process_frame
+	await process_frame
+	var start_d: float = main.camera.global_position.distance_to(a_pos)
+	await create_timer(1.3).timeout
+	await process_frame
+	check(start_d < 3.0 and main.camera.global_position.distance_to(b_pos) < 3.0,
+		"crane: glides from point A (%.1f m) to point B (%.1f m)" % [start_d, main.camera.global_position.distance_to(b_pos)])
+	# keys can be changed
+	ui.show_keys_window()
+	ui._capture_key("cinema")
+	var b_key := InputEventKey.new()
+	b_key.keycode = KEY_B
+	b_key.pressed = true
+	Input.parse_input_event(b_key)
+	await process_frame
+	await process_frame
+	check(main.keys.keys["cinema"] == KEY_B and ui._key_buttons["cinema"].text == "B", "Keys window: the cinematic mode moved to B")
+	ui._close_keys_window()
+	await process_frame
+	Input.parse_input_event(b_key)
+	await process_frame
+	await process_frame
+	check(not cin.on and ui.visible, "B now leaves it; the panel is back")
+	check(main.aircraft_tags[tester_id].visible and main.camera.attributes == null,
+		"name tags and plain lens back")
+	main._on_keys_reset()
+	check(main.keys.keys["cinema"] == KEY_M, "defaults again: M")
+	main.set_playing(false)
+
 	print("review file after reload:")
 	var text := FileAccess.get_file_as_string(review_file)
 	print("    ", text.replace("\n", " ").replace("\t", "").left(300))

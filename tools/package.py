@@ -86,6 +86,20 @@ decide and fill in the scoring sheet by hand, with the viewer's times (seconds s
 6. VIEW TAB
    Sizes of aircraft, weapons, text and ribbons; how long trails and markers stay; switches for
    shadows, SAM and AAA range rings, better lighting and more. Settings are remembered.
+   Keys... changes which key does what (click a key, press the new one).
+
+7. CINEMATIC MODE (for videos)
+   M (or the Cinematic button) hides everything but the world, for recording with OBS; M or
+   Esc brings the panels back, F11 is full screen, F1 lists its keys. Missiles smoke, things
+   explode and aircraft burn as in the game, only better looking.
+   Shots: 1 Chase, 2 Wingman, 3 Flyby (waits beside the aircraft's path), 4 Ground camera
+   (stays where the camera is and zooms like a long lens: fly there with 9 first), 5 Orbit,
+   6 Weapon (rides the next missile or bomb), 7 Lock-on (over the shoulder, target ahead; R:
+   next target), 8 Crane (glides through points set with K), 9 Drone (WASD, E/Q, Shift).
+   Tab picks the aircraft. Wheel: closer / further, Ctrl+wheel: zoom, Alt+wheel: background
+   blur, right-drag: angle, hold Z: snap zoom, hold X: slow motion, Space: pause (eases to a
+   stop), Backspace: retake from where you pressed Play. View tab: shake, slow motion speed,
+   orbit speed, crane move time.
 """
 PYTHON_NOTE_BUNDLED = "The Python it needs is included (the python folder)."
 PYTHON_NOTE_PATH = ("This needs Python 3 installed (python.org; tick \"Add python.exe to PATH\"). "
