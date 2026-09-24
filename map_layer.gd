@@ -9,19 +9,25 @@ extends Node3D
 #   lights : runway and city lights
 # Maps sit a few centimetres under their true height so terrain wins where they touch, as in
 # YSFlight (it draws the terrain after the maps).
+# ground_at(x, z) gives the ground under a point (for the aircraft shadows): the terrain there,
+# else sea level (the flat maps lie at 0).
 
 const PICTURE_DROP = 0.1     # metres the maps sit below their true height
 const LIGHT_LIFT = 0.3
+const HEIGHT_CELL = 500.0    # metres: cell size of the terrain index
 
 var field := ""
 var base_color := Color(0, 0, 0)      # the ground beyond the map (GND)
 var sky_color := Color(0.32, 0.48, 0.64)
+var _tris := PackedVector3Array()     # the terrain's upward-facing triangles (viewer axes), 3 points each
+var _cells := {}                      # Vector2i cell -> [index in _tris of each triangle over it]
 
 func build(data: Dictionary) -> void:
 	field = data.get("field", "")
 	sky_color = _color(data.get("sky", [82, 122, 163]))
 	base_color = _color(data.get("ground", [0, 0, 0]))
 	_add(Mesh.PRIMITIVE_TRIANGLES, data.get("solid", {}), _unlit(), 0.0)
+	_index_terrain(data.get("solid", {}).get("v", []))
 	_add(Mesh.PRIMITIVE_LINES, data.get("solid_lines", {}), _unlit(), 0.0)
 	var light_mat := _unlit()
 	light_mat.use_point_size = true
@@ -38,6 +44,48 @@ func build(data: Dictionary) -> void:
 		if mesh != null and n < layers.size() - 1:
 			_instance(mesh, _depth_only(priority + 2))
 		priority = mini(priority + 3, Material.RENDER_PRIORITY_MAX - 2)
+
+# The ground under a point (viewer axes): [height, normal] of the highest terrain triangle there,
+# else sea level [0, up] (also where the terrain dips below the sea).
+func ground_at(x: float, z: float) -> Array:
+	var best_y := -INF
+	var best_n := Vector3.UP
+	for k in _cells.get(Vector2i(floori(x / HEIGHT_CELL), floori(z / HEIGHT_CELL)), []):
+		var a := _tris[k]
+		var b := _tris[k + 1]
+		var c := _tris[k + 2]
+		var d := (b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z)
+		if absf(d) < 1e-9:
+			continue
+		var u := ((x - a.x) * (c.z - a.z) - (c.x - a.x) * (z - a.z)) / d
+		var w := ((b.x - a.x) * (z - a.z) - (x - a.x) * (b.z - a.z)) / d
+		if u < 0.0 or w < 0.0 or u + w > 1.0:
+			continue
+		var y := a.y + u * (b.y - a.y) + w * (c.y - a.y)
+		if y > best_y:
+			best_y = y
+			best_n = (b - a).cross(c - a).normalized()
+	if best_y < 0.0:
+		return [0.0, Vector3.UP]
+	return [best_y, best_n if best_n.y > 0.0 else -best_n]
+
+# The terrain's triangles that face up (not walls or sign boards), by the cells they cover.
+func _index_terrain(v: Array) -> void:
+	for i in range(0, v.size() - 8, 9):
+		var a := Vector3(v[i], v[i + 1], -v[i + 2])
+		var b := Vector3(v[i + 3], v[i + 4], -v[i + 5])
+		var c := Vector3(v[i + 6], v[i + 7], -v[i + 8])
+		var n := (b - a).cross(c - a)
+		if n.length_squared() < 1e-9 or absf(n.normalized().y) < 0.2:
+			continue
+		var k := _tris.size()
+		_tris.append_array(PackedVector3Array([a, b, c]))
+		for ix in range(floori(minf(a.x, minf(b.x, c.x)) / HEIGHT_CELL), floori(maxf(a.x, maxf(b.x, c.x)) / HEIGHT_CELL) + 1):
+			for iz in range(floori(minf(a.z, minf(b.z, c.z)) / HEIGHT_CELL), floori(maxf(a.z, maxf(b.z, c.z)) / HEIGHT_CELL) + 1):
+				var cell := Vector2i(ix, iz)
+				if not _cells.has(cell):
+					_cells[cell] = []
+				_cells[cell].append(k)
 
 static func _color(c: Array) -> Color:
 	return Color8(int(c[0]), int(c[1]), int(c[2]))

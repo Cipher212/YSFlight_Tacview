@@ -154,12 +154,20 @@ def build_event(paths, out_path, map_name, pack_dirs, fld_path=None):
     # it was removed: some hits destroy an aircraft outright)
     deaths = {"A%d" % e["index"]: e["death_t"] if e["death_t"] is not None else e["gone_t"]
               for e in aircraft_list}
-    for g in ground_list:
-        destroyed = [s["t"] for s in g["samples"] if s["state"] == 1]
-        deaths["G%d" % g["index"]] = destroyed[0] if destroyed else None
     track_end = {"A%d" % e["index"]: e["telemetry"][-1]["t"] for e in aircraft_list if e["telemetry"]}
+    # a ground object is destroyed only when the replays agree and it never fires again (a kill
+    # credit alone doesn't do it: event_merge.ground_fates); one still there "kept flying"
+    for g, fate in zip(ground_list, event_merge.ground_fates(files, offsets, t0, ground, ground_maps, cover)):
+        g.update(destroyed_t=fate["destroyed_t"], destroyed_check=fate["check"],
+                 destroyed_evidence=fate["evidence"])
+        deaths["G%d" % g["index"]] = fate["destroyed_t"]
+        if fate["destroyed_t"] is None and fate["last_alive"] is not None:
+            track_end["G%d" % g["index"]] = fate["last_alive"]
     own_file = {"A%d" % n: g[0]["file"] for n, g in enumerate(sorties) if g[0]["air"]["own"]}
     kills, unconfirmed = event_merge.merge_kills(records, deaths, track_end, own_file, cover)
+    for u in unconfirmed:
+        if u["victim"].startswith("G"):
+            u["evidence"] = ground_list[int(u["victim"][1:])]["destroyed_evidence"]
 
     explosions, events = [], []
     for i in offsets:
@@ -268,6 +276,10 @@ def build_event(paths, out_path, map_name, pack_dirs, fld_path=None):
               sum(1 for k in kills if k["other_claims"]), sum(1 for k in kills if not k["verified"])))
     print("  unconfirmed credits (no matching death) %d; missile kills reproduced %d of %d" % (
         len(unconfirmed), sum(k["reconstructed"] for k in missile_kills), len(missile_kills)))
+    print("  ground objects destroyed %d (%d where the replays disagree); credits on ones still there %d" % (
+        sum(g["destroyed_t"] is not None for g in ground_list),
+        sum(g["destroyed_t"] is not None and g["destroyed_check"] for g in ground_list),
+        sum(1 for u in unconfirmed if u["victim"].startswith("G"))))
     print("  saved %s in %.0f s" % (out_path, time.time() - started))
     progress(100, "done")
 

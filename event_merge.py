@@ -294,6 +294,74 @@ def match_ground(files, offsets, order):
     return merged, maps
 
 
+GROUND_FIRE_GRACE = 3.0    # s: rounds already fired may still leave just after an object dies
+GROUND_SETTLE = 10.0       # s after a destruction by which every game should show it
+
+
+def ground_fates(files, offsets, t0, ground, ground_maps, cover):
+    """When each merged ground object was really destroyed. A game's replay can show an object
+    destroyed (and credit the kill) while the server kept it: the object is still there in the
+    other players' replays and keeps firing. So a destruction counts only if the object never
+    fires again after it and, 10 s later, at least as many of the replays recording it show it
+    destroyed as show it standing. The earliest such moment is the destruction.
+    Returns per merged object {"destroyed_t" (event clock, or None), "check" (the replays
+    disagree), "evidence" (sentences), "last_alive" (the last moment it is known to be there)}."""
+    copies = collections.defaultdict(list)          # merged index -> [(file, local index)]
+    for i, m in ground_maps.items():
+        for local, k in m.items():
+            copies[k].append((i, local))
+    out = []
+    for k in range(len(ground)):
+        views = []
+        for i, local in copies[k]:
+            shift = offsets[i] - t0
+            views.append({"states": [(s["t"] + shift, s["state"]) for s in files[i]["ground"][local]["samples"]],
+                          "fire": [t + shift for t in files[i].get("ground_fire", {}).get(local, ())],
+                          "cover": cover[i]})
+        out.append(_ground_fate(views))
+    return out
+
+
+def _state_at(states, t):
+    """A replay's state of a ground object at time t (samples are written only on changes);
+    None before its first sample."""
+    k = bisect.bisect_right(states, (t, math.inf)) - 1
+    return states[k][1] if k >= 0 else None
+
+
+def _ground_fate(views):
+    switches = sorted({t for v in views for n, (t, st) in enumerate(v["states"])
+                       if st == 1 and (n == 0 or v["states"][n - 1][1] != 1)})
+    rejected = []
+    for t in switches:
+        later = [[f for f in v["fire"] if f > t + GROUND_FIRE_GRACE] for v in views]
+        check = t + GROUND_SETTLE
+        seen = [_state_at(v["states"], check) for v in views if v["cover"][0] <= check <= v["cover"][1]]
+        dead, alive = seen.count(1), seen.count(0)
+        if any(later):
+            rejected.append("Shown destroyed at %s in a replay, but it fired %d more time(s) (as %d replay(s) "
+                            "saw), the last at %s." % (_clock(t), max(len(x) for x in later),
+                                                      sum(1 for x in later if x), _clock(max(max(x) for x in later if x))))
+            continue
+        if alive > dead:
+            rejected.append("Shown destroyed at %s in a replay, but %d of %d replays recording it %d s later "
+                            "still show it there." % (_clock(t), alive, dead + alive, GROUND_SETTLE))
+            continue
+        return {"destroyed_t": round(t, 3), "check": alive > 0 or bool(rejected), "last_alive": t,
+                "evidence": ["Destroyed at %s: %s; it fired nothing after." % (
+                    _clock(t), "%d of %d replays recording it %d s later show it destroyed" % (dead, dead + alive, GROUND_SETTLE)
+                    if dead + alive else "the replays stop recording soon after")] + rejected}
+    ends = [v["cover"][1] for v in views] + [f for v in views for f in v["fire"]]
+    return {"destroyed_t": None, "check": bool(rejected), "last_alive": max(ends) if ends else None,
+            "evidence": ["Not destroyed: %s." % ("still there when the recordings end" if views else "no replay has it")]
+                        + rejected}
+
+
+def _clock(t):
+    s = int(max(t, 0.0))
+    return "%d:%02d:%02d" % (s // 3600, s // 60 % 60, s % 60) if s >= 3600 else "%d:%02d" % (s // 60, s % 60)
+
+
 def interp_ground(m, t):
     """Position of a merged ground object at time t. Ground objects are recorded only when
     they change (a static one may have a dozen samples in an hour), so no gap limit here."""

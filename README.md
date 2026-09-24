@@ -47,6 +47,15 @@ gathers the angles; scorers decide.
 Weapon trails, in the shooter's team colour: solid line = air-to-air missile, dashed =
 air-to-ground missile, dots = bomb (grey dots: a dropped fuel tank), short streak = rocket.
 
+Ground objects disappear when the replays agree they were destroyed: a replay shows it
+destroyed, nobody's replay shows it firing after that (3 s grace), and 10 s later most replays
+that recorded it show it gone. A kill credit on an object that is still there (a player got the
+kill message, but it kept firing) is listed as an unconfirmed credit, with the reasons. Events
+built before this rule hide an object as soon as its replay shows it destroyed: rebuild them.
+
+Aircraft cast a black shadow straight down on the ground or sea below them, as in YSFlight
+(View > Aircraft shadows).
+
 ## Folders
 
 | Folder | What | In the repository |

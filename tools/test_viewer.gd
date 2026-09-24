@@ -1,4 +1,6 @@
 extends SceneTree
+
+const Fmt = preload("res://fmt.gd")
 # Logic checks of the viewer against the made-up test event (tools/make_test_replay.py):
 #     TEST_EVENT=/abs/path/test.json.gz godot --headless --path . --script tools/test_viewer.gd
 # Deletes the event's review file first (KEEP_REVIEW=1: keeps it). Exit code 1 if a check fails.
@@ -155,6 +157,61 @@ func _init():
 	check(ui.kills_tree.get_root().get_child_count() == 1, "filter Confirmed: 1 kill listed")
 	ui.show_filter.select(ui.Show.ALL)
 	ui._refill()
+
+	print("ground objects:")
+	var gl = main.grounds
+	var destroyed := []
+	var standing := []
+	for n in main.event_data["ground_objects"].size():
+		var g: Dictionary = main.event_data["ground_objects"][n]
+		if g.get("destroyed_t") != null:
+			destroyed.append(n)
+		elif g["type"] == "[GOP]SAM":
+			standing.append(n)
+	check(destroyed.size() >= 1, "%d ground object(s) destroyed" % destroyed.size())
+	for n in destroyed:
+		var item: Dictionary = gl.items[n]
+		var t_d: float = main.event_data["ground_objects"][n]["destroyed_t"]
+		main.seek(t_d - 5.0)
+		await process_frame           # (process_frame comes before the viewer's _process:
+		await process_frame           # the second one sees the frame drawn at the new time)
+		var before: bool = item["dead"]
+		main.seek(t_d + 5.0)
+		await process_frame
+		await process_frame
+		# (headless Godot keeps no drawing data, so the despawn itself shows only in screenshots)
+		check(not before and item["dead"],
+			"%s drawn before %s, gone after" % [main.event_data["ground_objects"][n]["type"], Fmt.clock(t_d)])
+	for n in standing:
+		main.seek(400.0)
+		await process_frame
+		await process_frame
+		var why := ""
+		for id in ui._items:
+			if ui._items[id]["kind"] == "claim" and ui._items[id]["about"]["victim"] == "[GOP]SAM":
+				why = ui._items[id]["details"]
+		if why == "":
+			continue                  # (a test event without the false SAM kill)
+		check(not gl.items[n]["dead"], "the SAM with a false kill credit is still drawn at 6:40")
+		check(why.contains("fired"), "its credit is unconfirmed, with why: " + why.replace("\n", " / "))
+
+	print("shadows:")
+	main.seek(250.0)
+	await process_frame
+	await process_frame
+	var n_shadows := get_nodes_in_group("aircraft_shadow").size()
+	check(main.aircraft_shadows.size() == main.active_aircraft.size() and n_shadows > main.active_aircraft.size(),
+		"every aircraft has a shadow (%d shadow parts)" % n_shadows)
+	var some_id: String = main._in_air_now()[0]
+	var sp: Vector3 = main.aircraft_shadows[some_id].get_shader_parameter("ground_point")
+	var pos: Vector3 = main.active_aircraft[some_id].position
+	var ground: Array = main.map_node.ground_at(pos.x, pos.z)
+	check(is_equal_approx(sp.y, ground[0]) and is_equal_approx(sp.x, pos.x), "its ground point is under it (%.0f m, aircraft at %.0f m)" % [sp.y, pos.y])
+	check(main.map_node.ground_at(22500.0, -15600.0)[0] > 100.0 and main.map_node.ground_at(0.0, 0.0)[0] == 0.0,
+		"ground height: the island %.0f m, the sea 0 m" % main.map_node.ground_at(22500.0, -15600.0)[0])
+	main._on_view_changed("shadows", false)
+	check(get_nodes_in_group("aircraft_shadow").all(func(x): return not x.visible), "the View switch hides them")
+	main._on_view_changed("shadows", true)
 
 	print("review file after reload:")
 	var text := FileAccess.get_file_as_string(review_file)

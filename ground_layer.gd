@@ -2,8 +2,11 @@ extends Node3D
 # Ground objects with their own YSFlight models: the model the game's ground lists give for the
 # object's .dat (gro*.lst lines: "<.dat> <model> <collision> <cockpit> <coarse>"), read by
 # dnm_model.gd with every part in its first state. All objects of a type are one MultiMesh (one
-# draw call). A destroyed object turns dark. Clouds (RvB's low clouds, no collision) are drawn
-# see-through by their own models and can be hidden on their own.
+# draw call). A destroyed object is gone from the moment the pipeline found it destroyed
+# ("destroyed_t": the replays agree and it never fires again, event_merge.ground_fates; a kill
+# credit alone doesn't do it); in events built before that, from when its own replay shows it
+# destroyed. Clouds (RvB's low clouds, no collision) are drawn see-through by their own models
+# and can be hidden on their own.
 # A type without a model keeps a placeholder block the size of its box (gamedata.py), in its
 # team's colour.
 
@@ -11,9 +14,8 @@ const Main = preload("res://node_3d.gd")
 const Paths = preload("res://paths.gd")
 const PACKS = ["gamefiles", "YSFLIGHT-master/runtime/ground"]
 const NEUTRAL = Color(0.62, 0.6, 0.52)
-const DEAD = Color(0.12, 0.12, 0.12)
-const DEAD_TINT = Color(0.3, 0.3, 0.3)         # multiplies a model's own colours
 const CLOUD = Color(1.0, 1.0, 1.0, 0.07)
+const GONE = Transform3D(Basis(Vector3.ZERO, Vector3.ZERO, Vector3.ZERO), Vector3.ZERO)   # an instance not drawn
 
 var items := []           # {"mm", "slot", "color", "model", "box", "t_dead", "dead", "times", "poses"}
 var cloud_nodes := []
@@ -105,10 +107,13 @@ func setup(grounds: Array, meshes: Dictionary, paths: Dictionary) -> void:
 			item["color"] = Color.WHITE
 		else:
 			item["color"] = CLOUD if is_cloud else _team_color(int(g.get("iff", 0)))
-		for s in samples:
-			if int(s.get("state", 0)) == 1:
-				item["t_dead"] = s["t"]
-				break
+		if g.has("destroyed_t"):
+			item["t_dead"] = INF if g["destroyed_t"] == null else float(g["destroyed_t"])
+		else:
+			for s in samples:
+				if int(s.get("state", 0)) == 1:
+					item["t_dead"] = s["t"]
+					break
 		var times := PackedFloat64Array()
 		var poses := []
 		for s in samples:
@@ -132,13 +137,15 @@ func show_clouds(on: bool) -> void:
 func update(t: float) -> void:
 	for item in items:
 		var dead: bool = t >= item["t_dead"]
+		var times: PackedFloat64Array = item["times"]
 		if dead != item["dead"]:
 			item["dead"] = dead
-			var c: Color = item["color"]
 			if dead:
-				c = DEAD_TINT if item["model"] else Color(DEAD.r, DEAD.g, DEAD.b, c.a)
-			item["mm"].set_instance_color(item["slot"], c)
-		var times: PackedFloat64Array = item["times"]
+				item["mm"].set_instance_transform(item["slot"], GONE)
+			elif times.size() <= 1:
+				_place(item, item["poses"][0])
+		if dead:
+			continue
 		if times.size() > 1:                  # a mover (ships, vehicles): between its samples
 			var k := clampi(times.bsearch(t, false) - 1, 0, times.size() - 1)
 			var a: Transform3D = item["poses"][k]

@@ -22,8 +22,9 @@ The replays (`Raw_Data/`) and events (`events/`) are not in the repository (too 
    tracks and weapon launches, only from the replay chosen for each sortie.
 2. `event_merge.py`: clock alignment (anchors: kills, server-wide messages, spawns), match check
    by positions, per-replay delay, sortie identity across replays (label + position <500 m; the
-   pilot's own replay preferred), ground objects, kills: **one death, one kill** (credit: the
-   victim's game, else the shooter's, else most games; `other_claims`, unconfirmed credits).
+   pilot's own replay preferred), ground objects and when each was destroyed (`ground_fates`,
+   rule below), kills: **one death, one kill** (credit: the victim's game, else the shooter's,
+   else most games; `other_claims`, unconfirmed credits).
 3. `gamedata.py`: ground `.dat` (GUNRANGE, SAMRANGE, HTRADIUS, STRENGTH) and each object's box
    from the ground lists (`gro*.lst`: `<dat> <model> <collision> <cockpit> <coarse>`).
 4. `fld_reader.py` (`load_map`): the `.fld` -> `maps/<FIELD>.json` (format 3) and a terrain
@@ -42,14 +43,16 @@ The replays (`Raw_Data/`) and events (`events/`) are not in the repository (too 
    click), Build event -> `events/<first>_and_<n>_more.json.gz`.
 
 Viewer scripts: `node_3d.gd` (controller: clock, play/rewind/steps, loading on a thread,
-aircraft, name tags, flight path vectors, camera, keys, view settings), `ui_layer.gd` (start
+aircraft and their shadows, name tags, flight path vectors, camera, keys, view settings),
+`ui_layer.gd` (start
 menu, bars, side panel: search box, review filter, jump buttons, tabs Pilots / Kills / Deaths /
 Messages / Files / View, details box with the review buttons and note), `review.gd` (the review
 marks and their file), `combat_layer.gd` (trails, weapon models, tethers, markers, fireballs,
 kill feed), `weapon_models.gd` (which model each weapon uses), `ribbon_layer.gd` (energy ribbons
 + black smoke of aircraft going down; shader-windowed, built once on the loader thread),
-`ground_layer.gd` (ground objects: game models as MultiMesh per type, blocks if none),
-`map_layer.gd` (the map), `dnm_model.gd` (YSFlight `.dnm`/`.srf` models, cached in
+`ground_layer.gd` (ground objects: game models as MultiMesh per type, blocks if none; hidden
+from `destroyed_t`), `map_layer.gd` (the map; `ground_at(x, z)` = height and slope of the ground
+under a point, for the shadows), `dnm_model.gd` (YSFlight `.dnm`/`.srf` models, cached in
 `user://model_cache`, parsed on WorkerThreadPool), `event_builder.gd`, `fmt.gd`, `ys_air.gd`,
 `paths.gd` (where the data folders are). Settings (last event, panel, `view_*`) live in
 `user://settings.cfg`: the user's own; tests must not write it.
@@ -104,6 +107,23 @@ kill feed), `weapon_models.gd` (which model each weapon uses), `ribbon_layer.gd`
   counted. Each scorer runs their own copy, so one review file per event copy. Notes save 0.8 s
   after typing stops. N / C jump to the next kill / CHECK still to review; right after a jump
   the next one counts from the item picked (the replay starts a few seconds early).
+- Ground objects destroyed (user request: players got kill messages for objects still there
+  and firing): a candidate is each time a replay switches the object to state 1 (destroyed).
+  It is rejected if any replay records the object launching a weapon more than 3 s later (its
+  own launches, counted per replay: `ground_fire` in `yfs_reader`) or if 10 s later more of the
+  replays recording it show it standing than destroyed. The earliest accepted one is
+  `destroyed_t` (drawn until then, then hidden); a tie or a rejected candidate sets
+  `destroyed_check`; the reasons are in `destroyed_evidence`. A credit on an object never
+  destroyed becomes an unconfirmed credit with those reasons (via `track_end` = last seen
+  standing). Assumes objects don't respawn (asked the user, 2026-09-24). Events built before
+  this fall back to the first state-1 sample of the object's own replay.
+- Aircraft shadows (user request, "like YSFlight"), as FsSimulation::SimDrawComplexShadow: every
+  part flattened straight down onto the plane of the ground under the aircraft (the terrain
+  triangle there from `map_layer.ground_at`, else sea level 0), plain black, 0.4 m up and pulled
+  0.1 % towards the eye (YSFlight: polygon offset). Drawn in the transparent pass right after the
+  map's layers (render_priority -1, with depth writes): drawn opaque, OpenGL let the big flat sea
+  shapes paint over it. View tab switch "Aircraft shadows". YSFlight also puts shadows on
+  carrier decks (not done here).
 - Paths: every data file goes through `paths.gd` (`Paths.of("aircraft")` ...): the project
   folder from Godot, the .exe's folder when exported (an exported `res://` is inside the .exe).
 - RvB rules from the user: over-G = a death (-100), no credit; RvB servers damage aircraft above
@@ -143,13 +163,20 @@ hand it over. Not run on Windows (no Windows here); the same export for Linux wa
 - Pipeline: rebuild RvB 6 (~70 s) from the 12 `Raw_Data/*20260718*` replays (11 used; Manish (5)
   is another match); expected: 210 sorties, 218 kills, 91 of 119 missile kills reproduced.
 - Measure, don't guess: e.g. line widths were measured from screenshot pixels.
-- Cloud sessions (no replays): `tools/make_test_replay.py OUT.yfs` writes a made-up 9-minute
-  Luavi fight (7 sorties: 2 missile kills, an AGM kill, a crash, a leave under fire, an
-  unconfirmed credit, bombs, rockets, guns, flares, a fuel tank, chat, loadouts); build it with
-  the pipeline (-> 7 sorties, 3 kills, 3 of 3 reproduced). `tools/test_viewer.gd` (headless,
-  TEST_EVENT=...) checks models, trails, markers, ribbons, lists, jumps and the review file;
-  `tools/test_shots.gd` takes screenshots under `xvfb-run` with `--rendering-driver opengl3`
-  (Compatibility renderer: not what the user's D3D12 PC shows, but fine for layout and models).
+- Cloud sessions (no replays): `tools/make_test_replay.py OUT.yfs [SECOND.yfs]` writes a
+  made-up 9-minute Luavi fight (7 sorties: 2 missile kills, an AGM kill, a crash, a leave under
+  fire, an unconfirmed credit, bombs, rockets, guns, flares, a fuel tank, chat, loadouts, a SAM
+  that keeps firing after Tester's replay shows it destroyed with a kill credit) and optionally
+  the same fight as Bandit2's replay (clock 37.25 s later, 0.3 s lag; there the SAM stands).
+  Built together -> 7 sorties, 3 kills, 3 of 3 reproduced, 1 ground object destroyed (the tank,
+  2:05), 1 credit on one still there (the SAM). `tools/test_viewer.gd` (headless,
+  TEST_EVENT=...) checks models, trails, markers, ribbons, lists, jumps, the review file,
+  ground objects and shadows; `tools/test_shots.gd` takes screenshots under `xvfb-run`. The
+  user's renderer (Forward+) runs here on lavapipe: `apt-get install mesa-vulkan-drivers`, then
+  `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json xvfb-run -a -s "-screen 0 1920x1080x24"
+  godot --path . --rendering-driver vulkan --rendering-method forward_plus --resolution
+  1920x1080 --script tools/test_shots.gd` (slow but right); `--rendering-driver opengl3` is the
+  Compatibility renderer (what PCs without Vulkan/D3D12 fall back to) and draws differently.
   `tools/test_main.gd` is the settings-safe viewer they use; `tools/` has a `.gdignore`. Godot
   4.7.2 Linux and its export templates come from github.com/godotengine/godot/releases (the
   user allowed Godot downloads).
@@ -165,7 +192,12 @@ hand it over. Not run on Windows (no Windows here); the same export for Linux wa
   `TreeItem.move_to_bottom()` does not exist; a `.csv` in the project gets imported as
   translations by the open editor (keep documents in `docs/`, which has a `.gdignore`);
   `get_visible_rect()` is in stretched units; export templates don't take `--script`;
-  `SceneTree.process_frame` fires before the nodes' `_process`.
+  `SceneTree.process_frame` fires before the nodes' `_process`; the headless (dummy) renderer
+  keeps no MultiMesh instance transforms (always identity): test logic state, not drawing data.
+- OpenGL (Compatibility) only: an opaque shape lying just above the flat map layers (the sea)
+  was painted over by the layer's big sea triangles at some camera distances (Forward+ fine);
+  drawing it in the transparent pass after the layers fixed it. Unshaded ALBEDO is linear:
+  0.05 shows as grey 63 in Forward+ but 7 in OpenGL.
 - The UI is ~1152 units wide at 1920x1080 (stretch canvas_items): the bottom bar is full.
 - In `.srf`, `V` lines inside a face (`F` ... `E`) are point numbers, not points.
 - YSFlight has no over-G breakup in its own code (only blackout); RvB's G-limiter is a server rule.
@@ -179,7 +211,8 @@ detonation/kill markers (time-limited), energy ribbons (own width), flight path 
 tags, black smoke for aircraft going down; fates with causes and likelihoods (Deaths tab, CHECK
 marks, details box), kill confidence; review queue (confirm / reject + notes, file next to the
 event); search, review filter, N / C jumps, loss ticks on the timeline; Messages tab; loadouts
-in the sortie details; compressed event files; the Windows package (built by GitHub Actions).
+in the sortie details; compressed event files; the Windows package (built by GitHub Actions);
+ground objects destroyed by a rule across replays, and hidden from then on; aircraft shadows.
 
 Agreed next steps, in order:
 1. Deeper evidence: re-fly missiles against the target as the shooter's replay saw it (should
@@ -222,3 +255,8 @@ Agreed next steps, in order:
   compressed event files; plus: aircraft size must not widen the ribbons ("giant snakes"),
   weapon/kill markers must disappear after a while, weapons need their real models (WPNSHAPE)
   and A2A trails must differ from rockets, bombs, fuel tanks and AGMs.
+- They tested that build: "works really well". Then: ground objects must disappear when
+  destroyed, decided by a rule (players got kill messages for objects still there and firing),
+  and aircraft need YSFlight-style shadows for depth. Open question put to them: do RvB ground
+  objects ever respawn? (the rule assumes not). RvB 6 kill counts may drop when rebuilt: false
+  ground kills become unconfirmed credits.

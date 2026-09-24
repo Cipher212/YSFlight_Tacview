@@ -471,6 +471,7 @@ def _kill_evidence(ctx, k, aircraft_list):
             + fate.get("evidence", [])
         k["check"] = bool(fate.get("check")) or k["confidence"] < LIKELY
         return
+    g = ctx.ground_objects[int(v[1:])] if v.startswith("G") and v[1:].isdigit() else {}
     p = 0.5 + (0.25 if k.get("reconstructed") else 0.0) + (0.15 if k.get("seen_by", 1) >= 2 else 0.0) \
         + (0.05 if k.get("verified") else 0.0)
     k["confidence"] = round(min(p, 0.95), 2)
@@ -478,6 +479,5 @@ def _kill_evidence(ctx, k, aircraft_list):
                      % (k.get("seen_by", 1), max(k.get("covered_by", 1), 1))]
     if k.get("reconstructed") is not None:
         k["evidence"].append("Re-flown missile %s." % ("hit it" if k["reconstructed"] else "did not reach it"))
-    if k.get("verified"):
-        k["evidence"].append("The object is shown destroyed then.")
-    k["check"] = k["confidence"] < LIKELY
+    k["evidence"] += g.get("destroyed_evidence", [])     # when the replays agree it was destroyed
+    k["check"] = k["confidence"] < LIKELY or bool(g.get("destroyed_check"))

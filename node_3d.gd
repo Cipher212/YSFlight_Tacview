@@ -29,11 +29,39 @@ const VECTOR_COLOR = Color(1.0, 0.9, 0.25)
 const VECTOR_WIDTH_PX = 1.5
 const STRIP_NEAR = 1.0           # metres in front of the camera where the vectors are cut off
 const NOSE_COLOR = Color(0.72, 0.72, 0.72)
+# Aircraft shadows as YSFlight draws them (FsSimulation::SimDrawComplexShadow): the aircraft
+# flattened straight down (light from above) onto the plane of the ground under it, dark,
+# a little above the ground so it isn't lost in it. Drawn with the see-through things (ALPHA),
+# right after the map's painted layers: drawn with the solid things, OpenGL let the big sea
+# shapes paint over it (seen in screenshots). It writes depth, so trails behind it stay behind.
+const SHADOW_PRIORITY = -1       # after the map's layers (map_layer.gd: from RENDER_PRIORITY_MIN + 1)
+const SHADOW_SHADER = """
+shader_type spatial;
+render_mode unshaded, cull_disabled, skip_vertex_transform, depth_draw_always;
+
+uniform vec3 ground_point = vec3(0.0);
+uniform vec3 ground_normal = vec3(0.0, 1.0, 0.0);
+
+void vertex() {
+	vec3 w = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	vec3 n = ground_normal.y > 0.2 ? ground_normal : vec3(0.0, 1.0, 0.0);
+	w.y = ground_point.y - (n.x * (w.x - ground_point.x) + n.z * (w.z - ground_point.z)) / n.y + 0.4;
+	// a touch nearer the eye along its line of sight (the same place on screen), like YSFlight's
+	// polygon offset: the ground under it doesn't show through at a distance
+	VERTEX = (VIEW_MATRIX * vec4(w, 1.0)).xyz * 0.999;
+	NORMAL = normalize(mat3(VIEW_MATRIX) * n);
+}
+
+void fragment() {
+	ALBEDO = vec3(0.0);             // black, as in YSFlight
+	ALPHA = 1.0;
+}
+"""
 # View settings (View tab, saved in settings.cfg as "view_<key>")
 const VIEW_DEFAULTS = {"aircraft_scale": 1.0, "weapon_scale": 1.0, "text_scale": 1.0,
 	"trail_seconds": 30.0, "ribbon_width": 1.0, "marker_seconds": 30.0, "ribbons": true,
 	"vectors": true, "tags": true, "tethers": true, "markers": true, "ground": true, "clouds": true,
-	"blocky": false, "smoke": true}
+	"blocky": false, "smoke": true, "shadows": true}
 
 var camera: Camera3D
 var cam_rot_x: float = -0.5
@@ -54,6 +82,7 @@ var event_root: Node3D           # everything that belongs to the loaded event
 var active_aircraft = {} # marker nodes: position only, label rides on these
 var aircraft_models = {} # model inside each marker: gets the attitude
 var aircraft_tags = {}   # name tag on each marker
+var aircraft_shadows = {} # shadow material of each aircraft (its ground plane is set every frame)
 var telemetry_data = {}
 var current_frame_indices = {}
 var order: Array = []            # aircraft ids by start time (for Tab)
@@ -80,6 +109,7 @@ var _ground_index := {}          # ground object .dat -> its model file (from th
 var _ground_meshes := {}         # ground model path -> mesh (null if it has no faces)
 var _weapon_index := {}          # which model each aircraft's weapons use (weapon_models.gd)
 var _weapon_meshes := {}         # weapon model path -> mesh (null if it has no faces)
+var _shadow_shader: Shader
 
 func _ready():
 	get_window().mode = Window.MODE_MAXIMIZED
@@ -111,6 +141,8 @@ func _ready():
 	builder.progress.connect(func(p, text): ui.show_busy(p, "Building the event: " + text))
 	builder.finished.connect(_on_build_finished)
 	_ribbon_script = load("res://ribbon_layer.gd")
+	_shadow_shader = Shader.new()
+	_shadow_shader.code = SHADOW_SHADER
 	_ground_script = load("res://ground_layer.gd")
 	# start menu, offering the event used last time (else the newest one built)
 	var last: String = _setting("last_event", "")
@@ -192,6 +224,7 @@ func _rebuild_models() -> void:
 		active_aircraft[id].add_child(model)
 		old.queue_free()
 		aircraft_models[id] = model
+		_add_shadow(model, aircraft_shadows[id])
 
 func _box_model(team_color: Color) -> Node3D:
 	var root = Node3D.new()
@@ -232,6 +265,27 @@ func _box_model(team_color: Color) -> Node3D:
 	root.add_child(cockpit)
 
 	return root
+
+# A shadow for every part of an aircraft's model (the afterburner flame casts none): the same mesh
+# drawn with the aircraft's shadow material, which flattens it onto the ground (SHADOW_SHADER).
+func _add_shadow(model: Node3D, material: ShaderMaterial) -> void:
+	var flames := {}
+	if model.has_meta("dnm"):
+		var m: Dictionary = model.get_meta("dnm")
+		for gi in m["groups"].size():
+			if m["groups"][gi]["cla"] == DnmModel.AFTERBURNER:
+				flames[m["nodes"][gi]] = true
+	for part in model.find_children("*", "MeshInstance3D", true, false):
+		if flames.has(part.get_parent()):
+			continue
+		var s := MeshInstance3D.new()
+		s.mesh = part.mesh
+		s.material_override = material
+		s.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		s.extra_cull_margin = 16384.0          # drawn on the ground, far below the aircraft's own box
+		s.visible = view["shadows"]
+		s.add_to_group("aircraft_shadow")
+		part.add_child(s)
 
 # --- YSFLIGHT -> GODOT CONVERSION ---
 # YSFlight's world is left-handed (x east, y up, z north) and Godot's is
@@ -451,6 +505,7 @@ func clear_event() -> void:
 	event_data = null
 	active_aircraft.clear()
 	aircraft_models.clear()
+	aircraft_shadows.clear()
 	aircraft_tags.clear()
 	telemetry_data.clear()
 	current_frame_indices.clear()
@@ -480,6 +535,11 @@ func spawn_aircraft(data):
 
 			var plane_model = create_aircraft_model(entity)
 			marker.add_child(plane_model)
+			var shadow := ShaderMaterial.new()
+			shadow.shader = _shadow_shader
+			shadow.render_priority = SHADOW_PRIORITY
+			_add_shadow(plane_model, shadow)
+			aircraft_shadows[air_id] = shadow
 
 			# same size on screen at any distance, just above the aircraft, seen through terrain
 			var tag = Label3D.new()
@@ -602,6 +662,12 @@ func _process(delta):
 			if model.has_meta("dnm"):            # gear (0..255 up..down) and afterburner (flag bit 1)
 				DnmModel.pose(model, f1["ctrl"][3] / 255.0, (int(f1["ctrl"][8]) & 1) == 1)
 			positions[air_id] = marker.position
+			if view["shadows"]:
+				var ground: Array = map_node.ground_at(marker.position.x, marker.position.z) if map_node != null \
+					else [0.0, Vector3.UP]
+				var shadow: ShaderMaterial = aircraft_shadows[air_id]
+				shadow.set_shader_parameter("ground_point", Vector3(marker.position.x, ground[0], marker.position.z))
+				shadow.set_shader_parameter("ground_normal", ground[1])
 			var velocity := _velocity(frames, idx)
 			if view["vectors"]:
 				vector_items.append([marker.position, velocity, -attitude.z])
@@ -785,6 +851,7 @@ func _apply_view() -> void:
 	if grounds:
 		grounds.visible = view["ground"]
 		grounds.show_clouds(view["clouds"])
+	get_tree().call_group("aircraft_shadow", "set_visible", view["shadows"])
 
 # --- WHICH AIRCRAFT ---
 

@@ -47,7 +47,7 @@ def read_file(path):
     lines = _lines(path)
     d = {"file": os.path.basename(path), "path": path, "field": "", "wind": [0.0, 0.0, 0.0],
          "aircraft": [], "ground": [], "kills": [], "explosions": [], "events": [],
-         "loadouts": [], "plrair": [], "bulrecor_line": None}
+         "loadouts": [], "plrair": [], "bulrecor_line": None, "ground_fire": {}}
     cur = None
     i, n = 0, len(lines)
     while i < n:
@@ -223,9 +223,25 @@ def _read_events(lines, i, d):
 
 
 def _skip_to_kills(lines, i, d):
-    # Pass 1 skips the launches (read later, only from the files that are used)
+    # Pass 1 reads only who fired when for ground objects ("ground_fire": {local ground index:
+    # [times]}: one that fires is still there) and the kill credits; the launches themselves are
+    # read later, only from the files that are used
+    fire = collections.defaultdict(list)
+    d["ground_fire"] = fire
     while i < len(lines):
         line = lines[i]
+        if line.startswith("NUMRECO"):
+            count = int(line.split()[1])
+            i += 1
+            for _ in range(count):
+                a = lines[i].split(None, 2)
+                owner = lines[i + 1].split()[3:4]
+                wtype = int(a[1])
+                if owner and owner[0][:1] == "G" and owner[0][1:].isdigit():
+                    fire[int(owner[0][1:])].append(float(a[0]))
+                extra = wtype in AIR_TO_AIR_GUIDED or wtype in AIR_TO_GROUND_GUIDED or wtype == ROCKET
+                i += 3 if extra else 2
+            continue
         if line.startswith("KILLCREDIT"):
             count = int(line.split()[2])
             for k in range(count):

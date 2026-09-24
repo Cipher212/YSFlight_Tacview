@@ -63,6 +63,7 @@ const VIEW_SWITCHES = [
 	["markers", "Markers: a ball where each weapon ended (bright = hit, dark = missed) and a cross at each kill"],
 	["ground", "Ground objects"],
 	["clouds", "Clouds (see-through blocks)"],
+	["shadows", "Aircraft shadows on the ground (straight below, as in YSFlight)"],
 	["blocky", "Blocky placeholder aircraft instead of the game models (faster)"]]
 const TRAIL_HELP = "Weapon trails, in the shooter's team colour: solid line = air-to-air missile, " + \
 	"dashed = air-to-ground missile, dots = bomb (grey dots: a dropped fuel tank), short streak = " + \
@@ -694,11 +695,14 @@ func _build_items(data: Dictionary) -> void:
 	var claims: Array = data.get("unconfirmed_kills", [])
 	for n in claims.size():
 		var k: Dictionary = claims[n]
+		var why := "Recorded in %d game(s): %s" % [k.get("recorded_in", []).size(), k.get("reason", "")]
+		for ev in k.get("evidence", []):          # a ground object still there: why
+			why += "\n  " + ev
 		_items["c%d" % n] = {"kind": "claim", "t": float(k["t"]), "k": k, "check": false,
 			"line": "%s (%d s)  %s  %s ->  %s" % [Fmt.clock(k["t"]), int(k["t"]),
 				_ref_name(k.get("killer_ref")), Fmt.weapon(k["name"]), _ref_name(k.get("victim_ref"))],
 			"color": CLAIM_COLOR,
-			"details": "Recorded in %d game(s): %s" % [k.get("recorded_in", []).size(), k.get("reason", "")],
+			"details": why,
 			"about": {"kind": "claim", "t": float(k["t"]), "victim": _ref_name(k.get("victim_ref")),
 				"killer": _ref_name(k.get("killer_ref")), "weapon": str(k["name"])}}
 	for eid in _entities:

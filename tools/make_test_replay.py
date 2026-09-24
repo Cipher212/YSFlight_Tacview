@@ -1,14 +1,18 @@
 """Writes a made-up YSFlight replay (.yfs) of a small RvB fight on Luavi (9 minutes, one recorder),
 for testing the viewer and the pipeline where the real replays aren't available (cloud sessions).
 
-    python tools/make_test_replay.py OUT.yfs
-    python -X utf8 replay_parser.py --fld gamefiles/user/RvB/ww3/Luavi.fld -o OUT.json.gz OUT.yfs
+    python tools/make_test_replay.py OUT.yfs [SECOND.yfs]
+    python -X utf8 replay_parser.py --fld gamefiles/user/RvB/ww3/Luavi.fld -o OUT.json.gz OUT.yfs [SECOND.yfs]
+
+With SECOND.yfs it also writes [RED]Bandit2's replay of the same fight: its own clock (37.25 s
+ahead), the others seen 0.3 s late, and a SAM that Tester's game shows destroyed (with a kill
+credit) but that stays alive and keeps firing in Bandit2's game: a false ground kill.
 
 Blue: [BLUE]Tester (F-16, the recorder), [BLUE]Wingman (F-15), [BLUE]Striker (A-10).
 Red:  [RED]Bandit1 (MiG-29, killed by an AIM-120, respawns, later leaves in flight near Tester),
       [RED]Bandit2 (Su-25, fires an AIM-9 that is flared, later flies into the island),
       [RED]Bandit3 (J-10, killed by an AIM-9).
-Ground: a T-80U (killed by an AGM-65), a SAM, a moving blue destroyer.
+Ground: a T-80U (killed by an AGM-65), a SAM that fires now and then, a moving blue destroyer.
 Also: bombs, rockets, guns, flares, a dropped fuel tank, an unconfirmed credit, chat, loadouts.
 """
 import math
@@ -100,7 +104,7 @@ def track_for_sim(s, t_until=None):
                              for t, x, y, z, h, p, b, g, c in smp])
 
 
-def main(out):
+def main(out, second=None):
     blue_c, red_c = (16000.0, 9000.0), (23000.0, 9000.0)
     s = [
         Sortie(0, "F-16(BLUE/MULTIROLE)", "[BLUE]Tester", 1, 1, 0.0, END, circle(*blue_c, 2500, 3000, 230, 0.0), own=True),
@@ -218,14 +222,50 @@ def main(out):
     events += [(2.0, "Server: RvB test event starts, good luck"), (s[4].death + 1.0, "[RED]Bandit2: lag spike!!"),
                (482.0, "[RED]Bandit1 has left the server")]
 
-    # --- write the replay ---
+    # 7. The SAM (ground object 1) fires now and then. Tester's game shows it destroyed by Striker's
+    #    rockets at 3:20 and credits the kill, but Bandit2's game keeps it, and it keeps firing:
+    #    a false kill the pipeline must not believe
+    sx, sz = grounds[1]["pos"]
+    sy = G(sx, sz) + 5.0
+    for t in (185.0, 232.0, 275.0, 330.0):
+        tx, ty, tz = s[1].path(t + 5.0)
+        d = math.dist((sx, sy, sz), (tx, ty, tz))
+        weapons.append({"t": t, "type": 1, "x": sx, "y": sy, "z": sz, "yaw": math.atan2(-(tx - sx), tz - sz),
+                        "pitch": math.asin((ty - sy) / d), "roll": 0.0, "velocity": 300.0, "range": 6000.0,
+                        "damage": 12, "owner": "G1", "credit": "N", "max_speed": 800.0, "turn_rate": 0.5,
+                        "seeker_cone": 0.5, "target": -1})
+    false_kill = (4, "A2", "G1", 200.2, (sx, sy - 5.0, sz))
+
+    loadouts = {1: [("AIM120", 4), ("AIM9", 2), ("FUEL", 1600), ("GUN", 510), ("FLR", 60)],
+                2: [("AIM120", 6), ("AIM9", 2), ("GUN", 940), ("FLR", 60)],
+                3: [("AGM65", 2), ("B500", 2), ("B250", 1), ("B500HD", 1), ("RKT", 19), ("GUN", 1174)],
+                4: [("AIM120", 2), ("AIM9", 4), ("GUN", 150)], 5: [("AIM9", 2), ("RKT", 40), ("GUN", 250)],
+                6: [("AIM120", 4), ("AIM9", 2), ("GUN", 200)], 7: [("AIM120", 2), ("AIM9", 4), ("GUN", 150)]}
+    t_tank = grounds[0]["destroyed"]
+    write(out, s, grounds, weapons, kills + [false_kill], booms, events, loadouts, own=1,
+          dead_ground={0: t_tank, 1: 200.0})
+    if second:
+        write(second, s, grounds, weapons, kills, booms, events, loadouts, own=5, shift=37.25, lag=0.3,
+              dead_ground={0: t_tank + 0.3})
+    print("wrote %s%s: %d sorties, %d weapons, %d kill credits; deaths: Bandit1 %.1f, Bandit3 %.1f, Bandit2 crash "
+          "%.1f, T-80U %.1f; false SAM kill at 200.2" % (out, " and " + second if second else "", len(s), len(weapons),
+                                                          len(kills) + 1, s[3].death, s[5].death, s[4].death, t_tank))
+
+
+def write(out, s, grounds, weapons, kills, booms, events, loadouts, own=1, shift=0.0, lag=0.0, dead_ground=None):
+    """One player's replay: `own` is the recording pilot's IDANDTAG, `shift` this game's clock minus
+    the event clock, `lag` how late it sees the others, `dead_ground` {ground index: time} the
+    objects this game shows destroyed."""
+    dead_ground = dead_ground or {}
+    late = {"A%d" % k.n: (0.0 if k.ident == own else lag) for k in s}
     lines = ["YFSVERSI 20181124", "FIELDNAM [RVB]LUAVI 00000000", "CONSTWIND 0.000000m/s 0.000000m/s 0.000000m/s"]
     for k in s:
         smp = k.samples()
-        lines += ["AIRPLANE %s %s" % (k.typ, "TRUE" if k.own else "FALSE"), "IDENTIFY %d" % (k.iff - 1),
+        d = shift + late["A%d" % k.n]
+        lines += ["AIRPLANE %s %s" % (k.typ, "TRUE" if k.ident == own else "FALSE"), "IDENTIFY %d" % (k.iff - 1),
                   'IDANDTAG %d "%s"' % (k.ident, k.name), "NUMRECOR %d 4" % len(smp)]
         for t, x, y, z, h, p, b, g, c in smp:
-            lines += ["%g" % t, "%.2f %.2f %.2f %.4f %.4f %.4f %.1f" % (x, y, z, h, p, b, g),
+            lines += ["%g" % round(t + d, 3), "%.2f %.2f %.2f %.4f %.4f %.4f %.1f" % (x, y, z, h, p, b, g),
                       " ".join(str(int(v)) for v in c), "0"]
     for n, g in enumerate(grounds):
         x0, z0 = g["pos"]
@@ -235,31 +275,27 @@ def main(out):
                 pts.append((float(k), x0 + 6.0 * k, 0.0, z0, -math.pi / 2, 0))
         else:
             pts.append((0.0, x0, G(x0, z0), z0, 0.0, 0))
-            if g["destroyed"]:
-                pts.append((g["destroyed"], x0, G(x0, z0), z0, 0.0, 1))
+            if n in dead_ground:
+                pts.append((dead_ground[n], x0, G(x0, z0), z0, 0.0, 1))
         lines += ["GROUNDOB %s FALSE" % g["type"], "IDENTIFY %d" % (g["iff"] - 1), 'IDANDTAG %d ""' % (100 + n),
                   "NUMGDREC %d 3" % len(pts)]
         for t, x, y, z, h, state in pts:
-            lines += ["%g" % t, "%.2f %.2f %.2f %.4f 0.0000 0.0000" % (x, y, z, h), "%d %d" % (state, 0 if state else 20),
-                      "0.00 0.00 0.00 0.00 0.00 0.00 0.00 0.00 0.00 0 0 0", "0 0 0 0 0 0", "0"]
+            lines += ["%g" % round(t + shift, 3), "%.2f %.2f %.2f %.4f 0.0000 0.0000" % (x, y, z, h),
+                      "%d %d" % (state, 0 if state else 20), "0.00 0.00 0.00 0.00 0.00 0.00 0.00 0.00 0.00 0 0 0",
+                      "0 0 0 0 0 0", "0"]
     lines.append("EVTBLOCK")
-    lines += ["PLRAIR 0.000000 0", "OBJID 1", "ENDEVT"]
-    loadouts = {1: [("AIM120", 4), ("AIM9", 2), ("FUEL", 1600), ("GUN", 510), ("FLR", 60)],
-                2: [("AIM120", 6), ("AIM9", 2), ("GUN", 940), ("FLR", 60)],
-                3: [("AGM65", 2), ("B500", 2), ("B250", 1), ("B500HD", 1), ("RKT", 19), ("GUN", 1174)],
-                4: [("AIM120", 2), ("AIM9", 4), ("GUN", 150)], 5: [("AIM9", 2), ("RKT", 40), ("GUN", 250)],
-                6: [("AIM120", 4), ("AIM9", 2), ("GUN", 200)], 7: [("AIM120", 2), ("AIM9", 4), ("GUN", 150)]}
+    lines += ["PLRAIR %f 0" % shift, "OBJID %d" % own, "ENDEVT"]
     for k in s:
-        lines += ["WPNCFG %f 0" % k.t0, "AIRID %d" % k.ident]
+        lines += ["WPNCFG %f 0" % (k.t0 + shift), "AIRID %d" % k.ident]
         lines += ["CFG %s %d" % c for c in loadouts[k.ident]]
         lines.append("ENDEVT")
     for t, text in sorted(events):
-        lines += ["TXTEVT %f 0" % t, "TXT %s" % text, "ENDEVT"]
+        lines += ["TXTEVT %f 0" % (t + shift), "TXT %s" % text, "ENDEVT"]
     lines.append("EDEVTBLK")
-    weapons.sort(key=lambda w: w["t"])
     lines += ["BULRECOR", "VERSION 4", "NUMRECO %d" % len(weapons)]
-    for w in weapons:
-        lines.append("%g %d %.2f %.2f %.2f %.4f %.4f %.4f" % (w["t"], w["type"], w["x"], w["y"], w["z"],
+    for w in sorted(weapons, key=lambda w: w["t"]):
+        t = w["t"] + shift + late.get(w["owner"], 0.0)
+        lines.append("%g %d %.2f %.2f %.2f %.4f %.4f %.4f" % (round(t, 3), w["type"], w["x"], w["y"], w["z"],
                                                               w["yaw"], w["pitch"], w["roll"]))
         lines.append("%.2f %.2f %d %s %s" % (w["velocity"], w["range"], w["damage"], w["owner"], w["credit"]))
         if w["type"] in (1, 2, 6, 10):
@@ -268,17 +304,15 @@ def main(out):
             lines.append("%.2f" % w["max_speed"])
     lines.append("KILLCREDIT 1 %d" % len(kills))
     for wt, killer, victim, t, (x, y, z) in kills:
-        lines.append("%d %s %s P %.2f %.2f %.2f %.2f" % (wt, killer, victim, x, y, z, t))
+        lines.append("%d %s %s P %.2f %.2f %.2f %.2f" % (wt, killer, victim, x, y, z, t + shift))
     lines.append("ENDRECO")
     lines += ["EXPRECOR", "VERSION 3", "NUMRECO %d" % len(booms)]
     for t, (x, y, z), by in booms:
-        lines.append("%.2f %.2f %.2f %.2f 2.0 5.0 40.0 %s 1 0" % (t, x, y, z, by))
+        lines.append("%.2f %.2f %.2f %.2f 2.0 5.0 40.0 %s 1 0" % (t + shift, x, y, z, by))
     lines.append("ENDRECO")
     with open(out, "w") as f:
         f.write("\n".join(lines) + "\n")
-    print("wrote %s: %d sorties, %d weapons, %d kill credits; deaths: Bandit1 %.1f, Bandit3 %.1f, Bandit2 crash %.1f, T-80U %.1f"
-          % (out, len(s), len(weapons), len(kills), s[3].death, s[5].death, s[4].death, grounds[0]["destroyed"]))
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    main(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else None)

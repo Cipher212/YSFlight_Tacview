@@ -130,4 +130,48 @@ func _init():
 	ui.search.text = "bandit"
 	ui._refill()
 	await shot("13_pilots_search")
+	ui.search.text = ""
+	ui._refill()
+
+	# shadows straight below: the A-10 over the island (1:55), the F-16 over the sea (4:10)
+	ui.set_panel_visible(false)
+	main._on_view_changed("ribbons", false)
+	main._on_view_changed("trail_seconds", 30.0)
+	main._on_view_changed("weapon_scale", 1.0)
+	main._on_view_changed("aircraft_scale", 4.0)
+	await frame_with_shadow(entity("[BLUE]Striker"), 115.0)
+	await shot("14_shadow_island_4x")
+	main._on_view_changed("aircraft_scale", 10.0)
+	await frame_with_shadow(entity("[BLUE]Tester"), 250.0)
+	await shot("15_shadow_sea_10x")
+	main._on_view_changed("aircraft_scale", 1.0)
+	var f16: Vector3 = main.active_aircraft[entity("[BLUE]Tester")].position
+	place(Vector3(f16.x + 60, 90, f16.z + 80), Vector3(f16.x, 0, f16.z))
+	await shot("15b_shadow_sea_close_1x")
+	main._on_view_changed("shadows", false)
+	await shot("15c_shadows_off")
+	main._on_view_changed("shadows", true)
+	ui.set_panel_visible(true)
+
+	# the T-80U (destroyed at 2:05) before and after
+	main.seek(120.0)
+	main.tracked_id = ""
+	place(Vector3(20700, 700, -15600), Vector3(21400, 560, -15750))
+	await shot("16_tank_before")
+	main.seek(130.0)
+	await shot("17_tank_after")
 	quit()
+
+# Camera beside an aircraft, far enough to see it and its shadow on the ground straight below.
+func frame_with_shadow(id: String, t: float) -> void:
+	var a: Vector3 = await main_pos(id, t)
+	var g: float = main.map_node.ground_at(a.x, a.z)[0]
+	var mid := Vector3(a.x, (a.y + g) * 0.5, a.z)
+	place(mid + Vector3(0.6, 0.25, 0.8).normalized() * (a.y - g) * 1.2, mid)
+
+func main_pos(id: String, t: float) -> Vector3:
+	main.seek(t)
+	main.tracked_id = ""
+	for i in 2:
+		await process_frame
+	return main.active_aircraft[id].position
