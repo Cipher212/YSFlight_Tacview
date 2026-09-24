@@ -1,0 +1,12 @@
+user/RvB/ww3/ground/alicorn_deck.srf
+user/RvB/ww3/ground/alicorn_wire.srf
+user/RvB/ww3/ground/alicorn_catapult.srf
+user/RvB/ww3/ground/null.srf
+
+ILS 0m 0m 0m 0deg 0deg 0deg 0m
+VIEWPOINT FALSE
+ARRESTINGWIRE 7.084m 15.287m -115.616m -7.084m 15.287m -115.616m
+BRIDGEPOS 21.0m 28.0m -14.0m
+
+REM Crazy was here
+

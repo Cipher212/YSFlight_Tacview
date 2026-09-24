@@ -1,0 +1,17 @@
+Map requires 2ch ground objects
+
+
+Credits
+-------------------
+CrazyPilot: ground objects [Custom: (beachparty, dockhouse, fishinghut, oilrig); Repaints of 2ch: (fishingboat, hummer, pickupAA)]
+UltraViolet (waspe414): map, ground objects [Repaints of 2ch: (shandong), Custom: everything else]
+
+
+
+Permissions:
+-------------------
+- Reuse within YS: Use of ground objects, including repainting, is permitted with credit. Edits to map permitted with credit.
+
+- Use outside of YS: conversion for use in other games is not permitted without written consent from UltraViolet (waspe414) except in a condition where a successor to YSFLight is created by the community, in which case the above conditions apply
+
+- Reupload: if the primary release links are nonfunctional, and UltraViolet (waspe414) does not respond within a month, reupload to the main community hub (YSFHQ etc) is permitted

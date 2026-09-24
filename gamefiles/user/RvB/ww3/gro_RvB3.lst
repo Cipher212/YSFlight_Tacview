@@ -1,0 +1,39 @@
+user/RvB/ww3/ground/lowcloud1.dat user/RvB/ww3/ground/lowcloud1.dnm user/RvB/ww3/ground/null.srf "" user/RvB/ww3/ground/null.srf
+user/RvB/ww3/ground/lowcloud2.dat user/RvB/ww3/ground/lowcloud2.dnm user/RvB/ww3/ground/null.srf "" user/RvB/ww3/ground/null.srf
+user/RvB/ww3/ground/lowcloud3.dat user/RvB/ww3/ground/lowcloud3.dnm user/RvB/ww3/ground/null.srf "" user/RvB/ww3/ground/null.srf
+user/RvB/ww3/ground/lowcloud4.dat user/RvB/ww3/ground/lowcloud4.dnm user/RvB/ww3/ground/null.srf "" user/RvB/ww3/ground/null.srf
+user/RvB/ww3/ground/lowcloud5.dat user/RvB/ww3/ground/lowcloud5.dnm user/RvB/ww3/ground/null.srf "" user/RvB/ww3/ground/null.srf
+user/RvB/ww3/ground/lowcloud6.dat user/RvB/ww3/ground/lowcloud6.dnm user/RvB/ww3/ground/null.srf "" user/RvB/ww3/ground/null.srf
+user/RvB/ww3/ground/lowcloud7.dat user/RvB/ww3/ground/lowcloud7.dnm user/RvB/ww3/ground/null.srf "" user/RvB/ww3/ground/null.srf
+user/RvB/ww3/ground/lowcloud8.dat user/RvB/ww3/ground/lowcloud8.dnm user/RvB/ww3/ground/null.srf "" user/RvB/ww3/ground/null.srf
+
+user/RvB/ww3/ground/town1.dat user/RvB/ww3/ground/town1.dnm user/RvB/ww3/ground/town1_coll.srf "" user/RvB/ww3/ground/town1_coarse.dnm
+user/RvB/ww3/ground/jcup.dat user/RvB/ww3/ground/jcup.dnm user/RvB/ww3/ground/jcup_coll.dnm "" user/RvB/ww3/ground/jcup_coarse.dnm
+
+user/RvB/ww3/ground/city_a.dat user/RvB/ww3/ground/city_a.srf user/RvB/ww3/ground/city_a_coll.srf "" user/RvB/ww3/ground/city_a_coar.srf
+user/RvB/ww3/ground/city_b.dat user/RvB/ww3/ground/city_b.srf user/RvB/ww3/ground/city_b_coll.srf "" user/RvB/ww3/ground/city_b_coar.srf
+user/RvB/ww3/ground/city_c.dat user/RvB/ww3/ground/city_c.srf user/RvB/ww3/ground/city_c_coll.srf "" user/RvB/ww3/ground/city_c_coar.srf
+user/RvB/ww3/ground/city_d.dat user/RvB/ww3/ground/city_d.srf user/RvB/ww3/ground/city_d_coll.srf "" user/RvB/ww3/ground/city_d_coar.srf
+user/RvB/ww3/ground/city_e.dat user/RvB/ww3/ground/city_e.srf user/RvB/ww3/ground/city_e_coll.srf "" user/RvB/ww3/ground/city_e_coar.srf
+user/RvB/ww3/ground/city_f.dat user/RvB/ww3/ground/city_f.srf user/RvB/ww3/ground/city_f_coll.srf "" user/RvB/ww3/ground/city_f_coar.srf
+
+user/RvB/ww3/ground/containers1.dat user/RvB/ww3/ground/containers1.srf user/RvB/ww3/ground/containers1_coll.srf "" user/RvB/ww3/ground/containers1_coar.srf
+user/RvB/ww3/ground/containers2.dat user/RvB/ww3/ground/containers2.srf user/RvB/ww3/ground/containers2_coll.srf "" user/RvB/ww3/ground/containers2_coar.srf
+user/RvB/ww3/ground/largetanks.dat user/RvB/ww3/ground/largetanks.srf user/RvB/ww3/ground/largetanks_coll.srf "" user/RvB/ww3/ground/largetanks_coar.srf
+user/RvB/ww3/ground/oldtanks.dat user/RvB/ww3/ground/oldtanks.srf user/RvB/ww3/ground/oldtanks_coll.srf "" user/RvB/ww3/ground/oldtanks_coar.srf
+user/RvB/ww3/ground/smalltanks.dat user/RvB/ww3/ground/smalltanks.srf user/RvB/ww3/ground/smalltanks_coll.srf "" user/RvB/ww3/ground/smalltanks_coar.srf
+user/RvB/ww3/ground/warehouse1.dat user/RvB/ww3/ground/warehouse1.srf user/RvB/ww3/ground/warehouse1_coll.srf "" user/RvB/ww3/ground/warehouse1_coar.srf
+user/RvB/ww3/ground/warehouse1small.dat user/RvB/ww3/ground/warehouse1small.srf user/RvB/ww3/ground/warehouse1small_coll.srf "" user/RvB/ww3/ground/warehouse1small_coar.srf
+user/RvB/ww3/ground/warehouse2.dat user/RvB/ww3/ground/warehouse2.srf user/RvB/ww3/ground/warehouse2_coll.srf "" user/RvB/ww3/ground/warehouse2_coar.srf
+
+user/RvB/ww3/ground/dockhouse.dat user/RvB/ww3/ground/dockhouse.dnm user/RvB/ww3/ground/dockhouse_coll.srf "" user/RvB/ww3/ground/dockhouse_coar.dnm
+user/RvB/ww3/ground/fishingboat.dat user/RvB/ww3/ground/fishingboat.dnm user/RvB/ww3/ground/fishingboat_coll.srf "" user/RvB/ww3/ground/fishingboat_coar.srf
+user/RvB/ww3/ground/fishinghuts.dat user/RvB/ww3/ground/fishinghuts.dnm user/RvB/ww3/ground/fishinghuts_coll.srf "" user/RvB/ww3/ground/fishinghuts_coar.srf
+user/RvB/ww3/ground/hummer.dat user/RvB/ww3/ground/hummer.dnm user/RvB/ww3/ground/hummer_coll.srf "" user/RvB/ww3/ground/hummer_coar.dnm
+user/RvB/ww3/ground/pickupAA.dat user/RvB/ww3/ground/pickupAA.dnm user/RvB/ww3/ground/pickupAA_coll.srf "" user/RvB/ww3/ground/pickupAA_coar.dnm
+user/RvB/ww3/ground/oilrig.dat user/RvB/ww3/ground/oilrig.dnm user/RvB/ww3/ground/oilrig_coll.srf "" user/RvB/ww3/ground/oilrig_coar.dnm
+user/RvB/ww3/ground/windturbine.dat user/RvB/ww3/ground/windturbine.dnm user/RvB/ww3/ground/windturbine_coll.srf "" user/RvB/ww3/ground/windturbine_coar.dnm
+user/RvB/ww3/ground/beachparty.dat user/RvB/ww3/ground/beachparty.dnm user/RvB/ww3/ground/null.srf "" user/RvB/ww3/ground/beachparty_coar.dnm
+user/RvB/ww3/ground/tree_tropical.dat user/RvB/ww3/ground/tree_tropical.srf user/RvB/ww3/ground/tree_tropical_coll.srf "" user/RvB/ww3/ground/tree_tropical_coar.srf
+
+user/RvB/ww3/ground/shandong.dat user/RvB/ww3/ground/shandong.dnm user/RvB/ww3/ground/shandong_coll.srf "" user/RvB/ww3/ground/shandong_coar.dnm

@@ -1,0 +1,11 @@
+user/RvB/ww3/ground/shandong_deck.srf
+user/RvB/ww3/ground/shandong_wire.srf
+user/RvB/ww3/ground/shandong_cat.srf
+user/RvB/ww3/ground/null.srf
+
+ILS 4m 20.15m -87.3m 189.5deg 5deg 0deg 6000m
+VIEWPOINT FALSE
+ARRESTINGWIRE 11.563m 20.216m -85.332m -18.533m 20.216m -90.36m
+BRIDGEPOS 21.0m 28.0m -14.0m
+
+REM ACP File Aircraft Carrier Property

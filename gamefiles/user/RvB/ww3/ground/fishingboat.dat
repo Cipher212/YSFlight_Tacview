@@ -1,0 +1,43 @@
+IDENTIFY RVB3_FISHING_BOAT
+HTRADIUS 18m
+STRENGTH 180
+INITIGUN 0
+INITCANO 0
+INITISAM 0
+MAXSPEED 50km/h
+MAXROTAT 10deg
+MINAIMPI 80deg
+MAXAIMPI 80deg
+MINIDAMG 1
+GRNDTYPE NAVYSHIP
+ANTIGRND TRUE
+
+AIMROTAT 80deg
+AIMPITCH 80deg
+
+SAMRANGE 2000m
+SAMMINPI 7deg
+SAMMAXPI 90deg
+SAMMOUNT 0.0000m 11m -41.0m
+SAMRLOAD 1 20
+SYNCAASA TRUE
+
+
+NMTURRET 1
+
+TURRETPO 0 -1.570m 2.477m -14.895m 0deg 0deg 0deg   # Number x y z h p b
+TURRETPT 0 -2deg 60deg 0deg                  # Number MinPitch MaxPitch NeutralPitch
+TURRETHD 0 -95deg 95deg 0deg               # Number MinHdg MaxHdg NeutralHdg
+TURRETAM 0 999999999999                              # Ammo
+TURRETIV 0 0.8sec                              # Number ShootingInterval
+TURRETNP 0 GUN
+TURRETNH 0 GUNROTAT
+TURRETNM 0                         # DNM Node Name
+TURRETAR 0
+TURRETCT 0 GUNNER                            # Controlled by PILOT or GUNNER
+TURRETRG 0 3300m
+TURRETPW 0 1
+
+
+
+USEAIMAT 0m 1000m 0m

@@ -1,0 +1,15 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+
+# Big data, kept on the scorer's PC (GitHub refuses files over 100 MB):
+#   Raw_Data/  the .yfs replays (up to ~130 MB each)
+#   events/    event files built from them (100-300 MB each; rebuilt in about a minute)
+/Raw_Data/
+/events/
+/parsed_telemetry.json
+
+# Python and editor leftovers
+__pycache__/
+*.pyc
+*.tmp
