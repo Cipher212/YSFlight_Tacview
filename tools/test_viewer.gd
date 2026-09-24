@@ -258,12 +258,12 @@ func _init():
 	main._tag_clock = 1.0
 	await process_frame
 	await process_frame
-	check(main.aircraft_tags[tester_id].text.contains("40/40 health"), "Tester's tag at 2:30: 40/40 health")
+	check(main.aircraft_tags[tester_id].text.contains("Health 40/40"), "Tester's tag at 2:30: Health 40/40")
 	main.seek(210.0)
 	main._tag_clock = 1.0
 	await process_frame
 	await process_frame
-	check(main.aircraft_tags[tester_id].text.contains("35/40 health"), "after Bandit3's gun hits: 35/40 health")
+	check(main.aircraft_tags[tester_id].text.contains("Health 35/40"), "after Bandit3's gun hits: Health 35/40")
 	var tip_all := ""
 	for id in ui._pilot_items:
 		tip_all += ui._pilot_items[id].get_tooltip_text(0) + "\n"
@@ -278,6 +278,34 @@ func _init():
 	var two_files: bool = main.event_data.get("sources", []).filter(func(x): return x.get("included", false)).size() >= 2
 	check(seen_kill == two_files, "Striker's kill re-flown only as Bandit2's game saw it (%s)" %
 		("two replays" if two_files else "one replay: not possible"))
+
+	print("smoke and keys:")
+	var down := 0
+	for id in main.event_data["entities"]:
+		var e: Dictionary = main.event_data["entities"][id]
+		if e.get("death_t") != null:
+			down += 1
+	check(main.ribbons.smoke_node.get_child_count() == down,
+		"smoke only behind the %d aircraft that went down for good (Wingman's false tumble: none) (%d)" % [down, main.ribbons.smoke_node.get_child_count()])
+	ui.search.grab_focus()
+	var tab := InputEventKey.new()
+	tab.keycode = KEY_TAB
+	tab.pressed = true
+	var before_id: String = main.tracked_id
+	Input.parse_input_event(tab)
+	await process_frame
+	await process_frame
+	check(root.gui_get_focus_owner() == null and main.tracked_id != before_id and main.tracked_id != "",
+		"Tab in the search box: leaves it and switches aircraft (%s)" % main.tracked_id)
+	var p_key := InputEventKey.new()
+	p_key.keycode = KEY_P
+	p_key.pressed = true
+	var panel_was: bool = ui.side_panel.visible
+	Input.parse_input_event(p_key)
+	await process_frame
+	await process_frame
+	check(ui.side_panel.visible != panel_was, "P then hides / shows the panel, not typed anywhere")
+	ui.set_panel_visible(true)
 
 	print("range rings:")
 	check(gl.ring_nodes.size() == 2 and gl.ring_nodes.all(func(x): return not x.visible), "two ring layers, hidden at first")

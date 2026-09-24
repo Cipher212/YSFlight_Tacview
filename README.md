@@ -38,7 +38,7 @@ gathers the angles; scorers decide.
    kill or death still to review, Tab next aircraft, Esc free camera, P side panel, **T top
    view** (the map from straight above: WASD or right-drag to move, wheel to zoom). Click an
    aircraft to follow it; right-drag to look around; mouse wheel to zoom. Name tags show the
-   pilot, health (`35/40 health`), aircraft, height and speed.
+   pilot, health (`Health 35/40`), aircraft, height and speed.
 4. **Side panel:** Find (pilot names or words) and Show (all, still to review, confirmed ...)
    filter the lists; the buttons jump to the previous / next kill or CHECK. Tabs: Pilots (every
    sortie, how it ended, its damage log and loadout), Kills (with how sure each one is), Deaths

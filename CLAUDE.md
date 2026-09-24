@@ -143,8 +143,8 @@ shadows), `dnm_model.gd` (YSFlight `.dnm`/`.srf` models, cached in
   own entry ("went down"). What was near: re-flown weapons that hit it or passed within 60 m
   (also as the shooter saw them), explosions within 100 m (not an unnamed one after a fatal drop:
   its own crash), gun rounds / rockets within 40 m, over-G (>= 11 G), another aircraft within
-  30 m, the ground within 15 m. Health on the name tags: "35/40 health" (the most the track
-  shows), "going down" in states 4/5 (the game then sets health to 1).
+  30 m, the ground within 15 m. Health on the name tags: "Health 35/40" (against the health at
+  the start of the track), "Going down" in states 4/5 (the game then sets health to 1).
 - Crash finder (user: without cluttering the UI): only evidence lines in the details of crashed /
   collision / unclear endings: the nearest other aircraft (within 20 km, closing speed) and the
   nearest standing ground object (within 5 km).
@@ -165,6 +165,20 @@ shadows), `dnm_model.gd` (YSFlight `.dnm`/`.srf` models, cached in
 - Whole event from a folder: the .yfs files there (and one folder down) grouped by a date in the
   name (20260718, 2026-07-18 ...), else the day saved, and by map; newest first; the pipeline's
   match check still leaves out a replay of another match.
+- Black smoke only behind the tumble a track ends in (the final stretch of states 3/4/5 with a
+  4 or 5, as `event_merge.sortie_end`): replays can show an aircraft tumbling for a moment and
+  then flying on (lag; the user saw smoke that never ended behind aircraft that kept flying).
+  The damage log likewise counts only the final tumble as "went down".
+- Keys (user request): the viewer takes keys in `_input`, before the side panel: Tab only ever
+  switches aircraft (never moves the keyboard focus), shortcuts work whatever list or switch was
+  clicked last; only while a text box is typed in do keys go to it (Tab / Esc leave it); a
+  click in the 3D view drops the focus.
+- Look (user requests): the font is ACES07 (`fonts/ACES07_Regular.ttf`, the project's
+  `gui/theme/custom_font`; it reaches Label3Ds too; it has no "…" or dashes: Godot falls back);
+  UI words start with a capital ("Throttle", "Health 35/40", "Gear up", "Not reviewed yet",
+  endings "Shot down by ..."); the top bar button is "Start / Restart"; the window title is
+  "YSFlight Replay Viewer <version>" (config/name stays "Tacview_App": it names the user://
+  folder with the user's settings).
 - Paths: every data file goes through `paths.gd` (`Paths.of("aircraft")` ...): the project
   folder from Godot, the .exe's folder when exported (an exported `res://` is inside the .exe).
 - RvB rules from the user: over-G = a death (-100), no credit; RvB servers damage aircraft above
@@ -214,7 +228,8 @@ private: other scorers need to be collaborators to download, or the user shares 
   made-up 9-minute Luavi fight (7 sorties: 3 missile kills, an AGM kill, a crash, a leave under
   fire at 7:01, an unconfirmed credit, bombs, rockets, guns, flares, a fuel tank, chat, loadouts,
   a SAM that keeps firing after Tester's replay shows it destroyed with a kill credit, Bandit3's
-  gun run on Tester (40 -> 35 health), Wingman's 11.8 G pull (3 health), Striker killed at 4:35
+  gun run on Tester (40 -> 35 health), Wingman's 11.8 G pull (3 health) and a false 1 s tumble
+  at 5:50 (no smoke), Striker killed at 4:35
   by Bandit2's AIM-9 that hits only as Bandit2's game (0.3 s lag) saw it) and optionally the same
   fight as Bandit2's replay (clock 37.25 s later, 0.3 s lag; there the SAM stands). Built
   together -> 7 sorties, 4 kills, 4 of 4 reproduced (1 only as the shooter's game saw it), 1
@@ -326,3 +341,12 @@ Agreed next steps, in order:
   can be turned off. They asked for the .exe to be repacked for testing after each batch.
 - Answered: RvB ground objects never respawn once killed (only a server reset would, and that
   doesn't happen in an RvB event).
+
+## From the fourth chat (cloud, 2026-09-24)
+
+- The user ran v1.0 on RvB 6 rebuilt from 14 replays (loading took about 2 minutes) and asked,
+  before calling it final: "Start / Restart" on the top bar (it is the only way to start the
+  replay); black smoke that never ended behind aircraft that flew on after a false death
+  ([RED]Crazy, a UCAV at 1/5 health) - "if it can't be fixed cheaply, remove it" (fixed: only
+  the final tumble); Tab only for switching aircraft, never focusing buttons or text boxes; the
+  ACES07 font; capitalised UI words. Released as v1.1.

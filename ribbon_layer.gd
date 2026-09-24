@@ -1,8 +1,8 @@
 extends Node3D
 # Energy ribbons: a strip behind each aircraft over the last few seconds, coloured by its speed
 # (red slow, yellow, green fast) and turned with its wings, so rolls and turns show as well.
-# Smoke trails: black smoke behind an aircraft from the moment it starts going down (flight state
-# 4 or 5, tumbling) to where its track ends, so the exact point of death shows; the smoke stays a
+# Smoke trails: black smoke behind an aircraft from the moment it starts going down for good
+# (flight state 4 or 5, tumbling, until its track ends) to where its track ends, so the exact point of death shows; the smoke stays a
 # minute after the aircraft is gone, then fades.
 # build_arrays() runs once per event on the loader thread; after that the only work per frame is
 # one shader value, "now": the shaders hide every part of a strip outside its time window,
@@ -94,18 +94,19 @@ var smoke_node: Node3D
 static func build_arrays(entities: Dictionary) -> Dictionary:
 	return {"ribbons": _ribbon_arrays(entities), "smoke": _smoke_arrays(entities)}
 
-# The falling part of each track that has one: from the first tumbling sample to the end.
+# The falling part of each track that has one: the tumble the track ends in (the final stretch of
+# states 3/4/5, if it has a 4 or 5; as event_merge.sortie_end). A replay can show an aircraft
+# tumbling for a moment and then flying on (lag): that is no death and gets no smoke.
 static func _smoke_arrays(entities: Dictionary) -> Array:
 	var out := []
 	for id in entities:
 		var frames: Array = entities[id].get("telemetry", [])
-		var start := -1
-		for i in frames.size():
-			var state := int(frames[i]["ctrl"][0])
-			if state == 4 or state == 5:
-				start = i
-				break
-		if start < 0 or start >= frames.size() - 1:
+		var start := frames.size()
+		var tumbled := false
+		while start > 0 and int(frames[start - 1]["ctrl"][0]) in [3, 4, 5]:
+			start -= 1
+			tumbled = tumbled or int(frames[start]["ctrl"][0]) != 3
+		if not tumbled or start >= frames.size() - 1:
 			continue
 		var pts := PackedVector3Array()
 		var ts := PackedFloat64Array()

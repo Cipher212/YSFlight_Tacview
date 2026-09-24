@@ -61,7 +61,7 @@ decide and fill in the scoring sheet by hand, with the viewer's times (seconds s
    Left / Right 10 s (Shift: 60 s), N next kill, C next item still to review (Shift: back),
    Tab next aircraft, Esc free camera, T top view (the map from above), P side panel.
    Mouse: click an aircraft to follow it, right-drag to look around, wheel to zoom.
-   Name tags show pilot, health (9/10 health), aircraft, height and speed.
+   Name tags show pilot, health (Health 9/10), aircraft, height and speed.
 
 4. SCORE
    Side panel tabs: Pilots (every sortie), Kills (with how sure each one is, in %%), Deaths

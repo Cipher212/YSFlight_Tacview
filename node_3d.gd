@@ -123,6 +123,10 @@ var _shadow_shader: Shader
 
 func _ready():
 	get_window().mode = Window.MODE_MAXIMIZED
+	# the window's title shows which version this is (version.txt comes with a release)
+	var version_file := Paths.of("version.txt")
+	get_window().title = "YSFlight Replay Viewer" + (("  " + FileAccess.get_file_as_string(version_file).strip_edges())
+		if FileAccess.file_exists(version_file) else "")
 	setup_environment()
 	ui = load("res://ui_layer.gd").new()
 	add_child(ui)
@@ -939,12 +943,12 @@ func _update_tag(id: String, alt_m: float, speed_ms: float, ctrl: Array) -> void
 	if tag.text != text:
 		tag.text = text
 
-# "9/10 health" (the replay's health against the health at the start), "going down" once hit
+# "Health 9/10" (the replay's health against the health at the start), "Going down" once hit
 # for good (the game then sets health to 1).
 func health_text(id: String, ctrl: Array) -> String:
 	if int(ctrl[0]) in [4, 5]:
-		return "going down"
-	return "%d/%d health" % [int(ctrl[9]), full_health.get(id, int(ctrl[9]))]
+		return "Going down"
+	return "Health %d/%d" % [int(ctrl[9]), full_health.get(id, int(ctrl[9]))]
 
 # --- VIEW SETTINGS (View tab) ---
 
@@ -1029,14 +1033,14 @@ func _in_air_now() -> Array:
 func _info_text() -> String:
 	if event_data == null:
 		return ""
-	var hint := "Zoom %d m  |  Tab: next aircraft  |  Esc: free camera  |  click an aircraft to follow it" % cam_distance
+	var hint := "Zoom %d m  |  Tab: Next aircraft  |  Esc: Free camera  |  Click an aircraft to follow it" % cam_distance
 	if top_view:
-		hint = "Top view %.1f km  |  wheel: zoom  |  Tab: next  |  Esc: stop following  |  T: 3D" % (camera.size / 1000.0)
+		hint = "Top view %.1f km  |  Wheel: Zoom  |  Tab: Next  |  Esc: Stop following  |  T: 3D" % (camera.size / 1000.0)
 	if tracked_id == "":
 		if top_view:
-			return "Top view %.1f km  |  WASD / right-drag: move  |  wheel: zoom  |  click: follow  |  T: 3D" \
+			return "Top view %.1f km  |  WASD / Right-drag: Move  |  Wheel: Zoom  |  Click: Follow  |  T: 3D" \
 				% (camera.size / 1000.0)
-		return "Free camera (WASD, E/Q, Shift)  |  Tab or click an aircraft to follow it  |  T: top view"
+		return "Free camera (WASD, E/Q, Shift)  |  Tab or click an aircraft to follow it  |  T: Top view"
 	var e = event_data["entities"][tracked_id]
 	var frames = telemetry_data[tracked_id]
 	var iff := int(e.get("iff", 0))
@@ -1049,21 +1053,21 @@ func _info_text() -> String:
 			"Track: seen from %s (%.2f s delay removed)" % [src.get("file", "?"), src.get("delay", 0.0)]
 	var fate = e.get("fate", {})
 	if replay_time < frames[0]["t"]:
-		return "%s\nnot in the air yet: starts at %s\n%s" % [text, Fmt.clock(frames[0]["t"]), hint]
+		return "%s\nNot in the air yet: starts at %s\n%s" % [text, Fmt.clock(frames[0]["t"]), hint]
 	if replay_time > frames[-1]["t"]:
-		return "%s\ngone since %s\n%s" % [text, Fmt.clock(frames[-1]["t"]), hint]
+		return "%s\nGone since %s\n%s" % [text, Fmt.clock(frames[-1]["t"]), hint]
 	var p0 := _pos_at(frames, replay_time - 0.25)
 	var p1 := _pos_at(frames, replay_time + 0.25)
 	var tas := p0.distance_to(p1) / 0.5
 	var alt: float = active_aircraft[tracked_id].position.y
 	var f = frames[current_frame_indices[tracked_id]]
 	var ctrl = f["ctrl"]
-	var state: String = {0: "flying", 1: "on the ground", 2: "STALLED", 3: "gone", 4: "GOING DOWN",
-		5: "GOING DOWN", 6: "stopped", 7: "overrun"}.get(int(ctrl[0]), "")
+	var state: String = {0: "Flying", 1: "On the ground", 2: "STALLED", 3: "Gone", 4: "GOING DOWN",
+		5: "GOING DOWN", 6: "Stopped", 7: "Overrun"}.get(int(ctrl[0]), "")
 	text += "\nIAS %d kt   TAS %d kt   M %.2f   ALT %d ft   G %.1f" % [
 		YsAir.ias(tas, alt) * YsAir.MS_TO_KT, tas * YsAir.MS_TO_KT, tas / YsAir.mach_one(alt),
 		alt * YsAir.M_TO_FT, f.get("g", 0.0)]
-	text += "\nthrottle %d%%%s   gear %s   %s   %s" % [ctrl[10], " + afterburner" if int(ctrl[8]) & 1 else "",
+	text += "\nThrottle %d%%%s   Gear %s   %s   %s" % [ctrl[10], " + Afterburner" if int(ctrl[8]) & 1 else "",
 		"down" if int(ctrl[3]) > 127 else "up", state,
 		health_text(tracked_id, ctrl) if int(ctrl[0]) not in [4, 5] else ""]
 	if where != "":
@@ -1079,49 +1083,81 @@ func _place_feed() -> void:
 
 # --- INPUT ---
 
-func _unhandled_input(event):
-	if event is InputEventKey and event.pressed:
-		match event.keycode:
-			KEY_TAB:
-				var ids := _in_air_now()
-				if ids.size() > 0:
-					var i := ids.find(tracked_id)
-					follow(ids[posmod(i + (-1 if event.shift_pressed else 1), ids.size())])
-			KEY_ESCAPE:
-				tracked_id = ""
-			KEY_P:
-				ui.toggle_panel()
-			KEY_T:
-				set_top_view(not top_view)
-			KEY_SPACE:
-				set_playing(not playing)
-			KEY_J:
-				rewind()
-			KEY_K:
-				set_playing(false)
-			KEY_L:
-				fast_forward()
-			KEY_COMMA:
-				frame_step(-1, event.shift_pressed)
-			KEY_PERIOD:
-				frame_step(1, event.shift_pressed)
-			KEY_LEFT:
-				seek(replay_time - (60.0 if event.shift_pressed else 10.0))
-			KEY_RIGHT:
-				seek(replay_time + (60.0 if event.shift_pressed else 10.0))
-			KEY_HOME:
-				restart()
-			KEY_N:
-				ui.jump_kill(-1 if event.shift_pressed else 1)
-			KEY_C:
-				ui.jump_check(-1 if event.shift_pressed else 1)
-			KEY_EQUAL, KEY_PLUS, KEY_KP_ADD:
-				playback_speed = min(playback_speed * 2.0, 512.0)
-				ui.show_speed(playback_speed)
-			KEY_MINUS, KEY_KP_SUBTRACT:
-				playback_speed = max(playback_speed / 2.0, 0.01)
-				ui.show_speed(playback_speed)
+# Keys reach the viewer before the side panel and menus: Tab only ever switches aircraft (Godot
+# would otherwise move the keyboard focus to a button or text box, and later keys would go
+# there), and the shortcuts work whatever list or switch was clicked last. Only while a text box
+# is being typed in do the other keys go to it; Tab and Esc leave it.
+func _input(event):
+	if not (event is InputEventKey and event.pressed):
+		return
+	var focus := get_viewport().gui_get_focus_owner()
+	var typing := focus is LineEdit or focus is TextEdit
+	if typing and event.keycode not in [KEY_TAB, KEY_ESCAPE]:
+		return
+	if typing and event.keycode == KEY_ESCAPE:
+		focus.release_focus()
+		get_viewport().set_input_as_handled()
+		return
+	if ui.start_menu.visible:
+		if event.keycode == KEY_TAB:
+			get_viewport().set_input_as_handled()
+		return
+	if _key(event):
+		if focus != null:
+			focus.release_focus()
+		get_viewport().set_input_as_handled()
 
+# A shortcut key; false if it isn't one.
+func _key(event: InputEventKey) -> bool:
+	if event.keycode == KEY_TAB:
+		if not ui.start_menu.visible:
+			var ids := _in_air_now()
+			if ids.size() > 0:
+				var i := ids.find(tracked_id)
+				follow(ids[posmod(i + (-1 if event.shift_pressed else 1), ids.size())])
+		return true
+	match event.keycode:
+		KEY_ESCAPE:
+			tracked_id = ""
+		KEY_P:
+			ui.toggle_panel()
+		KEY_T:
+			set_top_view(not top_view)
+		KEY_SPACE:
+			set_playing(not playing)
+		KEY_J:
+			rewind()
+		KEY_K:
+			set_playing(false)
+		KEY_L:
+			fast_forward()
+		KEY_COMMA:
+			frame_step(-1, event.shift_pressed)
+		KEY_PERIOD:
+			frame_step(1, event.shift_pressed)
+		KEY_LEFT:
+			seek(replay_time - (60.0 if event.shift_pressed else 10.0))
+		KEY_RIGHT:
+			seek(replay_time + (60.0 if event.shift_pressed else 10.0))
+		KEY_HOME:
+			restart()
+		KEY_N:
+			ui.jump_kill(-1 if event.shift_pressed else 1)
+		KEY_C:
+			ui.jump_check(-1 if event.shift_pressed else 1)
+		KEY_EQUAL, KEY_PLUS, KEY_KP_ADD:
+			playback_speed = min(playback_speed * 2.0, 512.0)
+			ui.show_speed(playback_speed)
+		KEY_MINUS, KEY_KP_SUBTRACT:
+			playback_speed = max(playback_speed / 2.0, 0.01)
+			ui.show_speed(playback_speed)
+		_:
+			return false
+	return true
+
+func _unhandled_input(event):
+	if event is InputEventMouseButton and event.pressed:
+		get_viewport().gui_release_focus()     # a click in the 3D view leaves any list or text box
 	if event is InputEventMouseButton and event.pressed:
 		if top_view and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
 			var k := 1.0 / 1.15 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.15

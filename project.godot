@@ -20,6 +20,10 @@ config/icon="res://icon.svg"
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 
+[gui]
+
+theme/custom_font="res://fonts/ACES07_Regular.ttf"
+
 [physics]
 
 3d/physics_engine="Jolt Physics"

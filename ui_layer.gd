@@ -288,6 +288,10 @@ func jump_check(direction: int) -> void:
 # How a sortie ended, in a line: the most likely cause with its likelihood, and the runner-up if
 # it is a real alternative (events built before the likelihoods: the old wording).
 func fate_text(fate: Dictionary) -> String:
+	var text := _fate_words(fate)
+	return text.left(1).to_upper() + text.substr(1)
+
+func _fate_words(fate: Dictionary) -> String:
 	var causes: Array = fate.get("causes", [])
 	if not fate.has("causes"):
 		match fate.get("kind", ""):
@@ -327,7 +331,7 @@ func damage_text(e: Dictionary) -> String:
 func fate_details(fate: Dictionary) -> String:
 	var lines := []
 	for c in fate.get("causes", []):
-		lines.append("%d%%  %s" % [roundi(c["p"] * 100.0), c["text"]])
+		lines.append("%d%%  %s" % [roundi(c["p"] * 100.0), c["text"].left(1).to_upper() + c["text"].substr(1)])
 		for w in c.get("why", []):
 			lines.append("      - " + w)
 	if not fate.get("evidence", []).is_empty():
@@ -354,7 +358,7 @@ func _build_top(root: Control) -> void:
 	top_button = _tip(_button(row, "Top view (T)", top_view_toggled.emit),
 		"The map from straight above: WASD or right-drag to move, mouse wheel to zoom, T to go back") as Button
 	row.add_child(VSeparator.new())
-	_button(row, "Restart", restart.emit)
+	_tip(_button(row, "Start / Restart", restart.emit), "Play the replay from the beginning (Home)")
 	row.add_child(_label("Jump to:"))
 	jump_edit = LineEdit.new()
 	jump_edit.placeholder_text = "mm:ss"
@@ -419,7 +423,7 @@ func _build_bottom(root: Control) -> void:
 	speed_menu.item_selected.connect(_on_speed_item)
 	row.add_child(speed_menu)
 	speed_edit = LineEdit.new()
-	speed_edit.placeholder_text = "any, e.g. 0.67"
+	speed_edit.placeholder_text = "Any, e.g. 0.67"
 	speed_edit.custom_minimum_size.x = 120
 	speed_edit.text_submitted.connect(_on_speed_text)
 	row.add_child(speed_edit)
@@ -439,7 +443,7 @@ func _build_side(root: Control) -> void:
 	column.add_child(find_row)
 	find_row.add_child(_label("Find:"))
 	search = LineEdit.new()
-	search.placeholder_text = "pilot name or words"
+	search.placeholder_text = "Pilot name or words"
 	search.clear_button_enabled = true
 	search.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	search.tooltip_text = "Shows only the pilots, kills, deaths and messages containing this text"
@@ -605,7 +609,7 @@ func _build_start_menu(root: Control) -> void:
 	menu_groups.visible = false
 	menu_groups.item_selected.connect(func(i): _use_replays(PackedStringArray(_folder_groups[i]["files"])))
 	v.add_child(menu_groups)
-	menu_replays_label = _label("none chosen")
+	menu_replays_label = _label("None chosen")
 	menu_replays_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(menu_replays_label)
 	var r2 := HBoxContainer.new()
@@ -1223,7 +1227,7 @@ func _show_review() -> void:
 	var st := review.status(_selected)
 	confirm_button.set_pressed_no_signal(st == "confirmed")
 	reject_button.set_pressed_no_signal(st == "rejected")
-	review_state.text = {"confirmed": "confirmed", "rejected": "rejected"}.get(st, "not reviewed yet")
+	review_state.text = {"confirmed": "Confirmed", "rejected": "Rejected"}.get(st, "Not reviewed yet")
 	review_state.add_theme_color_override("font_color", _item_color(_selected) if st != "" else Color(0.75, 0.75, 0.75))
 	if note_edit.text != review.note(_selected):
 		note_edit.text = review.note(_selected)

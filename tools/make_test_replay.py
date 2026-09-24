@@ -9,7 +9,7 @@ ahead), the others seen 0.3 s late, and a SAM that Tester's game shows destroyed
 credit) but that stays alive and keeps firing in Bandit2's game: a false ground kill.
 
 Blue: [BLUE]Tester (F-16, the recorder; hit by Bandit3's gun), [BLUE]Wingman (F-15; loses health
-      pulling 11.8 G), [BLUE]Striker (A-10; killed by Bandit2's AIM-9, a hit only in Bandit2's
+      pulling 11.8 G; shown tumbling for a second at 5:50 and flying on), [BLUE]Striker (A-10; killed by Bandit2's AIM-9, a hit only in Bandit2's
       game, which sees Striker 0.3 s late: the re-flight against Striker's own track misses).
 Red:  [RED]Bandit1 (MiG-29, killed by an AIM-120, respawns, later leaves in flight near Tester),
       [RED]Bandit2 (Su-25, fires an AIM-9 that is flared, later flies into the island),
@@ -63,6 +63,7 @@ class Sortie:
         self.leave = leave      # disappears in flight at t1
         self.hit_at = []        # (time, health lost) before the death
         self.g_at = []          # (from, to, G): hard pulls
+        self.blip = None        # (from, to): shown tumbling for a moment, then flying on (lag)
 
     def samples(self):
         out = []
@@ -79,6 +80,8 @@ class Sortie:
             for when, lost in self.hit_at:
                 if abs(t - when) < 0.025:
                     health -= lost
+            if self.blip and self.blip[0] <= t <= self.blip[1]:
+                state = 4
             if self.death is not None and t >= self.death:
                 dt = t - self.death             # tumbling down
                 y -= 0.5 * 9.8 * dt * dt * 6
@@ -243,6 +246,7 @@ def main(out, second=None):
     # 5b. Wingman pulls 11.8 G for a second: the RvB server takes a health point every 0.3 s
     s[1].g_at = [(300.0, 301.1, 11.8)]
     s[1].hit_at = [(300.3, 1), (300.6, 1), (300.9, 1)]
+    s[1].blip = (350.0, 351.0)      # a false tumble: no death, no smoke
 
     # 5c. Bandit2's AIM-9 at Striker. Bandit2's game shows Striker 0.3 s late and the missile hits
     #     there; against Striker's own track it runs out just short. Striker goes down 0.3 s after

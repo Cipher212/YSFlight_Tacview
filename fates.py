@@ -539,9 +539,12 @@ def damage_log(ctx, n, e):
     tr = ctx.tracks.get(n)
     if not tel or tr is None:
         return []
+    final = len(tel)                                # the dead stretch the track ends in
+    while final > 0 and tel[final - 1]["ctrl"][0] in (3, 4, 5):
+        final -= 1
     groups = []
     for k in range(1, len(tel)):
-        if tel[k - 1]["ctrl"][0] in (3, 4, 5):
+        if k - 1 >= final:
             break                                   # already going down (health is then set to 1)
         lost = tel[k - 1]["ctrl"][9] - tel[k]["ctrl"][9]
         if lost <= 0:
@@ -549,7 +552,7 @@ def damage_log(ctx, n, e):
         t = tel[k]["t"]
         j = bisect.bisect_left(tr.t, t - 0.5)
         g = max(abs(f.get("g", 0.0)) for f in tel[j:k + 1])
-        down = tel[k]["ctrl"][0] in (4, 5)
+        down = k >= final and tel[k]["ctrl"][0] in (4, 5)   # (a tumble it flew on from is no death)
         last = groups[-1] if groups else None
         if last and not down and not last["down"] and t - last["t1"] <= DAMAGE_JOIN and (g >= OVER_G) == last["overg"]:
             last.update(t1=t, to=tel[k]["ctrl"][9], g=max(last["g"], g))
@@ -559,7 +562,7 @@ def damage_log(ctx, n, e):
     out = []
     for grp in groups:
         why = _damage_sources(ctx, n, grp)
-        what = "health %d, went down" % grp["from"] if grp["down"] else "health %d -> %d" % (grp["from"], grp["to"])
+        what = "Health %d, went down" % grp["from"] if grp["down"] else "Health %d -> %d" % (grp["from"], grp["to"])
         if grp["t1"] - grp["t0"] >= 0.3:
             what += " over %.1f s" % (grp["t1"] - grp["t0"])
         out.append({"t": round(grp["t0"], 3), "t_end": round(grp["t1"], 3), "from": grp["from"], "to": grp["to"],
