@@ -184,7 +184,11 @@ explosions, burning aircraft). Settings (last event, panel, `view_*`, `key_*`) l
   M hides `ui` (the CanvasLayer), tags, vectors, ribbons, rings and in `combat_layer.set_cinema`
   the trails, tethers, markers, fireballs, kill labels and feed; weapon models untinted at true
   size, gun rounds YSFlight-style (yellow -> white, 10 m ahead); aircraft true size; mouse hidden;
-  positions on a cubic Hermite through the samples (`node_3d._smooth`, `track_pos`), only there.
+  tracks smoothed, only there (`node_3d._filtered`, `track_pos`, `track_vel`: a Gaussian-weighted
+  local line, sigma 0.2 s, attitude 0.1 s): replays jitter the tracks of aircraft seen through the
+  network by metres at each update (YSFlight's client snaps them to a blend of the last two
+  updates by the ratio of local to remote time, FsAirplaneProperty::NetworkDecode, and flies them
+  on in between); the test fight's tracks are clean, the user's weren't.
   Shots 1-9 as in `cinema.gd`'s header (chase with H level/roll, wingman, flyby placed at the
   track 2.5 s ahead, ground cam parked where the camera was with an auto long lens and riding a
   moving ground object within 300 m, orbit, weapon cam, lock-on with R, crane through K points
@@ -193,9 +197,12 @@ explosions, burning aircraft). Settings (last event, panel, `view_*`, `key_*`) l
   zoom 3x, hold X slow motion (View "Slow motion", eased), Space eases to a stop, Backspace
   retake (`note_play` when Play starts), F11 full screen, F1 key list. Follow cameras ease on the
   replay's clock (the same lag in slow motion), mouse / orbit / crane / drone on the real one.
-  Shake: trauma from explosions (900 m), G (chase / wingman / lock-on), aircraft rushing past
-  within 250 m, times View "Camera shake"; noise on the replay clock. Day/night: not yet (the
-  user: RvB has dynamic day/night now; that is for v2.0).
+  Shake: only in the flyby (the user, testing v1.2: elsewhere "a nonstop earthquake", two planes
+  where there was one: the rush check compared the camera's frame-to-frame speed with the
+  aircraft's, so network jitter read as rushing past; and a long lens magnified it): aircraft
+  rushing past the still flyby camera within 250 m (their smoothed speed), explosions within
+  900 m, times View "Flyby shake", scaled by fov / 55 (the same on screen when zoomed); noise on
+  the replay clock. Day/night: not yet (the user: RvB has dynamic day/night now; that is for v2.0).
 - Cinematic effects (user: "match the YSFlight style but better"; YS explosions are a black dome
   going red to black, burning is square sprites, OGL 2.0 smoke is acceptable): all from the
   replay time (scrub, reverse, freeze). Smoke trails of missiles (6 s), flares (4.5 s, red at
@@ -273,8 +280,9 @@ private: other scorers need to be collaborators to download, or the user shares 
   health tags, damage log, crash finder, rings, top view, lighting and the folder pick;
   `tools/test_shots.gd` takes screenshots under `xvfb-run`, `tools/test_cinema_shots.gd` the
   cinematic mode's (ONLY=a..g picks parts); test_viewer also checks the cinematic mode (hiding,
-  shot distances, lock-on, weapon cam, effects, flyby, ground cam, snap zoom, shake, slow motion,
-  pause, retake, crane, rebinding a key in the Keys window). The
+  shot distances, lock-on, weapon cam, effects, flyby, ground cam, snap zoom, a track with
+  network-style jitter drawn smoothly, shake only in the flyby, slow motion, pause, retake, crane,
+  rebinding a key in the Keys window). The
   user's renderer (Forward+) runs here on lavapipe: `apt-get install mesa-vulkan-drivers`, then
   `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json xvfb-run -a -s "-screen 0 1920x1080x24"
   godot --path . --rendering-driver vulkan --rendering-method forward_plus --resolution
@@ -328,7 +336,8 @@ ground objects destroyed by a rule across replays, and hidden from then on; airc
 Ground tab; health on name tags; damage log; crash finder; SAM / AAA range rings; top view (T);
 better lighting; whole event from a folder; missiles re-flown as the shooter's game saw them;
 v1.0 release workflow and the one-page how-to; v1.1 fixes; v1.2 cinematic mode (9 shots, lens,
-shake, eased slow motion / pause, retake, effects) and remappable keys. Not yet measured on RvB 6
+shake, eased slow motion / pause, retake, effects) and remappable keys; v1.2.1 (flyby-only shake,
+smoothed tracks). Not yet measured on RvB 6
 (no replays here): the new "reproduced" count (was 91 of 119), the ground-object numbers, the
 damage logs, and the cinematic effects' frame rate in a big furball (test: 60 explosions, 40
 burning, 400 trails at once = 9 ms a frame; realistic ~1-2 ms).
@@ -410,5 +419,7 @@ Agreed next steps, in order:
   formation pans (WW2), sunset silhouettes, slow motion, telephoto tracking (ISPR parody). They
   approved the shot list and keys as proposed and asked for remappable keys ("if not too
   complex") and effects "YSFlight's style but better". Day/night: hold until v2.0.
-- Built as v1.2 (cinematic mode + keys). Not yet tested by them: ask how the shots, effects and
-  frame rate (their PC + OBS) went.
+- Built as v1.2 (cinematic mode + keys). They tested it: the shake jittered every shot but the
+  flyby ("you can see 2 planes where there is one", worst in the ground camera zoomed in); they
+  suggested shake only in the flyby or none. v1.2.1: shake only in the flyby, tracks smoothed in
+  the cinematic mode. Still to hear: the shots, effects and frame rate (their PC + OBS).

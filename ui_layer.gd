@@ -74,7 +74,7 @@ const VIEW_SWITCHES = [
 	["blocky", "Blocky placeholder aircraft instead of the game models (faster)"]]
 # the cinematic mode's settings (View tab), as the sliders above
 const CINEMA_SLIDERS = [
-	["cine_shake", "Camera shake", 0.0, 3.0, false, "%.2fx"],
+	["cine_shake", "Flyby shake", 0.0, 3.0, false, "%.2fx"],
 	["cine_slow", "Slow motion", 0.05, 0.5, false, "%.2fx"],
 	["cine_orbit", "Orbit speed", 0.0, 60.0, false, "%d deg/s"],
 	["cine_crane", "Crane move", 1.0, 30.0, false, "%.1f s"]]

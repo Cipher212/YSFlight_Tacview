@@ -34,9 +34,11 @@ extends Node
 # Backspace = retake (back to where Play was last pressed, the shot starting afresh), F11 = full
 # screen, F1 = the key list, M or Esc = leave. Tab picks the aircraft.
 #
-# Shake comes from what is happening, times the View tab's "Camera shake": the G the aircraft
-# pulls (cameras riding with it), aircraft rushing past the camera, explosions nearby. It runs on
-# the replay's clock, so it slows down with slow motion and stops when paused.
+# Shake, only in the flyby (the user: in the other shots it was a nonstop earthquake - replays
+# jitter the tracks of aircraft seen through the network, which read as aircraft rushing past
+# the camera): aircraft rushing past the flyby camera and explosions near it, times the View tab's
+# "Flyby shake". It runs on the replay's clock (slows down with slow motion, stops when paused)
+# and is as big on screen at any zoom.
 #
 # Time: the camera eases along with the replay's clock (a follow camera lags the same in slow
 # motion as at full speed); mouse moves, zooms and the orbit / crane / drone run on the real clock.
@@ -117,7 +119,6 @@ var _trauma := 0.0               # explosions: shake that dies away
 var _shake_t := 0.0
 var _noise := FastNoiseLite.new()
 var _last_t := 0.0               # replay time last frame
-var _last_pos := Vector3.ZERO    # camera last frame (its speed, for aircraft rushing past)
 var _take_t := 0.0               # Retake: where Play was last pressed
 var _take_cam := Transform3D()
 var _take_orbit := 0.0
@@ -181,7 +182,6 @@ func enter() -> void:
 	_cut = true
 	rate = 1.0 if main.playing else 0.0
 	base = main.camera.global_transform
-	_last_pos = base.origin
 	_last_t = main.replay_time
 	_take_t = main.replay_time
 	_take_cam = base
@@ -413,7 +413,6 @@ func update(delta: float) -> void:
 	cam.global_transform = _shaken(s, dts, t)
 	if fx != null:
 		fx.update(t, cam.global_position)
-	_last_pos = base.origin
 	_last_t = t
 	_cut = false
 	if _hint_clock > 0.0:
@@ -428,8 +427,7 @@ func _subject() -> Dictionary:
 	if id == "" or not main.active_aircraft.has(id) or not main.active_aircraft[id].visible \
 			or not main.aircraft_attitude.has(id):
 		return {}
-	var t: float = main.replay_time
-	var v: Vector3 = (main.track_pos(id, t + 0.1) - main.track_pos(id, t - 0.1)) / 0.2
+	var v: Vector3 = main.track_vel(id, main.replay_time)
 	return {"id": id, "pos": main.active_aircraft[id].position, "basis": main.aircraft_attitude[id], "vel": v}
 
 # --- shots ---
@@ -481,7 +479,7 @@ func _place_flyby(s: Dictionary) -> void:
 	var id: String = s["id"]
 	var t: float = main.replay_time + FLYBY_LEAD
 	var p: Vector3 = main.track_pos(id, t)
-	var v: Vector3 = (main.track_pos(id, t + 0.1) - main.track_pos(id, t - 0.1)) / 0.2
+	var v: Vector3 = main.track_vel(id, t)
 	var f: Vector3 = v.normalized() if v.length() > 5.0 else _flight_dir(s)
 	var side := f.cross(Vector3.UP)
 	side = side.normalized() if side.length() > 0.1 else Vector3.RIGHT
@@ -730,11 +728,13 @@ func _lens(delta: float, focus: float) -> void:
 		_attrs.dof_blur_near_transition = focus * 0.45
 		_attrs.dof_blur_amount = blur * 0.22
 
-# The camera with its shake: small turns (and a little movement) following smooth noise, as
-# strong as the strongest cause now.
+# The camera with its shake (the flyby only): small turns (and a little movement) following
+# smooth noise, as strong as the strongest cause now: an aircraft rushing past the (still)
+# camera, or an explosion nearby.
 func _shaken(s: Dictionary, dts: float, t: float) -> Transform3D:
 	var strength: float = main.view["cine_shake"]
-	if strength <= 0.0:
+	if strength <= 0.0 or shot != Shot.FLYBY:
+		_trauma = 0.0
 		return base
 	_trauma = maxf(_trauma - dts * 0.8, 0.0)
 	var combat = main.combat
@@ -745,29 +745,21 @@ func _shaken(s: Dictionary, dts: float, t: float) -> Transform3D:
 			if dist < BLAST_RANGE:
 				_trauma = minf(_trauma + 0.95 * pow(1.0 - dist / BLAST_RANGE, 2.0), 1.0)
 			i += 1
-	var floor_ := 0.0
-	if not s.is_empty() and shot in [Shot.CHASE, Shot.WINGMAN, Shot.LOCK_ON]:
-		var frames: Array = main.telemetry_data[s["id"]]
-		var f: Dictionary = frames[main.current_frame_indices[s["id"]]]
-		floor_ = clampf((absf(float(f.get("g", 1.0))) - 2.0) / 8.0, 0.0, 1.0) * 0.55
-		if (int(f["ctrl"][8]) & 1) == 1:
-			floor_ = maxf(floor_, 0.16)
-	if dts > 0.0:                                # aircraft rushing past the camera
-		var cam_v := (base.origin - _last_pos) / dts
-		for id in main.active_aircraft:
-			var m: Node3D = main.active_aircraft[id]
-			if not m.visible:
-				continue
-			var dist := m.position.distance_to(base.origin)
-			if dist > RUMBLE_RANGE or dist < 0.5:
-				continue
-			var v: Vector3 = (main.track_pos(id, t + 0.1) - main.track_pos(id, t - 0.1)) / 0.2
-			var rush := clampf((v - cam_v).length() / 220.0, 0.0, 1.0)
-			floor_ = maxf(floor_, rush * pow(1.0 - dist / RUMBLE_RANGE, 2.0))
+	var rumble := 0.0                            # aircraft rushing past (the flyby camera stands still)
+	for id in main.active_aircraft:
+		var m: Node3D = main.active_aircraft[id]
+		if not m.visible:
+			continue
+		var dist := m.position.distance_to(base.origin)
+		if dist > RUMBLE_RANGE or dist < 0.5:
+			continue
+		var rush := clampf(main.track_vel(id, t).length() / 220.0, 0.0, 1.0)
+		rumble = maxf(rumble, rush * pow(1.0 - dist / RUMBLE_RANGE, 2.0))
 	_shake_t += dts
-	var amount := strength * pow(clampf(maxf(_trauma, floor_), 0.0, 1.0), 2.0)
+	var amount := strength * pow(clampf(maxf(_trauma, rumble), 0.0, 1.0), 2.0)
 	if amount <= 0.0001:
 		return base
+	amount *= main.camera.fov / FOV              # the same size on screen when zoomed in
 	var turn := Vector3(_wobble(0), _wobble(1), _wobble(2) * 1.3) * deg_to_rad(SHAKE_DEG) * amount
 	var move := Vector3(_wobble(3), _wobble(4), 0.0) * 0.25 * amount
 	return Transform3D(base.basis * Basis.from_euler(turn), base.origin + base.basis * move)
@@ -860,6 +852,6 @@ func _key_lists() -> Array:
 	right.append("Alt+Wheel  -  Background blur")
 	right.append("Right-drag  -  The camera's angle")
 	left.append("")
-	left.append("View tab: Camera shake, Slow motion speed,")
+	left.append("View tab: Flyby shake, Slow motion speed,")
 	left.append("Orbit speed, Crane move seconds; Keys...")
 	return ["\n".join(left), "\n".join(right)]

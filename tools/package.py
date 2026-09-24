@@ -98,7 +98,7 @@ decide and fill in the scoring sheet by hand, with the viewer's times (seconds s
    next target), 8 Crane (glides through points set with K), 9 Drone (WASD, E/Q, Shift).
    Tab picks the aircraft. Wheel: closer / further, Ctrl+wheel: zoom, Alt+wheel: background
    blur, right-drag: angle, hold Z: snap zoom, hold X: slow motion, Space: pause (eases to a
-   stop), Backspace: retake from where you pressed Play. View tab: shake, slow motion speed,
+   stop), Backspace: retake from where you pressed Play. View tab: flyby shake, slow motion speed,
    orbit speed, crane move time.
 """
 PYTHON_NOTE_BUNDLED = "The Python it needs is included (the python folder)."

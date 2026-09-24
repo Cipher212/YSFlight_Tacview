@@ -27,6 +27,14 @@ const AIRCRAFT_DIR = "aircraft"         # the aircraft's game files (.dat + .dnm
 const TAG_PIXEL = 0.0007         # name tag size (times the text size setting)
 const TAG_INTERVAL = 0.2         # seconds between name tag updates
 const VECTOR_SECONDS = 1.0       # a flight path vector reaches where the aircraft will be in 1 s
+# The cinematic mode smooths the tracks (`_filtered`): an aircraft seen through the network jumps
+# a few metres at each update in the replays (YSFlight's client snaps it to a blend of the last
+# two updates, FsAirplaneProperty::NetworkDecode, and flies it on between them), which close
+# cameras and long lenses showed as jitter. Seconds (Gaussian sigma): position, attitude. Measured
+# on a test track with 4 m errors every 0.1 s: 0.2 s leaves ~1/100 of the jitter and pulls an
+# 11.8 G turn 0.4 m inwards.
+const SMOOTH_SIGMA = 0.2
+const SMOOTH_SIGMA_ATT = 0.1
 # Top view (T): the map from straight above, north up, drawn without perspective (orthographic)
 const TOP_HEIGHT = 60000.0       # metres: the top view's camera height (above everything)
 const TOP_SIZE_MIN = 300.0       # metres from the bottom to the top of the screen, zoomed in fully
@@ -706,13 +714,16 @@ func _process(delta):
 			if time_gap > 0:
 				weight = clamp((replay_time - f1["t"]) / time_gap, 0.0, 1.0)
 
-			if cinema.on:                # a smooth curve through the samples (slow motion, close cameras)
-				marker.position = _smooth(frames, idx, weight)
+			var attitude: Basis
+			if cinema.on:                # smoothed (network jitter out): slow motion, close cameras
+				var sm := _filtered(frames, idx, replay_time)
+				marker.position = sm[0]
+				attitude = sm[2]
 			else:
 				marker.position = ys_position(f1).lerp(ys_position(f2), weight)
-			# Both keyframes must go through the same conversion, or the
-			# slerp swings between two different attitudes every frame.
-			var attitude: Basis = ys_basis(f1).slerp(ys_basis(f2), weight)
+				# Both keyframes must go through the same conversion, or the
+				# slerp swings between two different attitudes every frame.
+				attitude = ys_basis(f1).slerp(ys_basis(f2), weight)
 			aircraft_attitude[air_id] = attitude
 			var model: Node3D = aircraft_models[air_id]
 			model.basis = attitude.scaled(Vector3(model_size, model_size, model_size))
@@ -890,34 +901,62 @@ static func _pos_at(frames, t) -> Vector3:
 	var w = clamp((t - f1["t"]) / gap, 0.0, 1.0) if gap > 0 else 0.0
 	return ys_position(f1).lerp(ys_position(f2), w)
 
-# The position on a track between samples i and i + 1 (w: 0..1 between them) on a smooth curve
-# through the samples (cubic Hermite; the slopes from the samples either side), so an aircraft
-# moves without the small kinks at each sample that show in slow motion and close up.
-static func _smooth(frames: Array, i: int, w: float) -> Vector3:
+# The track at time t, smoothed (the cinematic mode): [position, velocity, attitude]. Position and
+# velocity: a straight line fitted to the samples within 3 sigma of t, the nearer the more
+# weight (Gaussian; local linear regression, so it doesn't lag or drift at the ends and copes
+# with uneven sample times); attitude: the weighted mean of the nose and top directions.
+# i: the last sample at or before t.
+static func _filtered(frames: Array, i: int, t: float) -> Array:
 	var n := frames.size()
-	var f1: Dictionary = frames[i]
-	var f2: Dictionary = frames[mini(i + 1, n - 1)]
-	var p1 := ys_position(f1)
-	var p2 := ys_position(f2)
-	var h: float = f2["t"] - f1["t"]
-	if h <= 0.0:
-		return p1
-	var f0: Dictionary = frames[maxi(i - 1, 0)]
-	var f3: Dictionary = frames[mini(i + 2, n - 1)]
-	var m1 := (p2 - ys_position(f0)) / maxf(float(f2["t"]) - float(f0["t"]), 0.001) * h
-	var m2 := (ys_position(f3) - p1) / maxf(float(f3["t"]) - float(f1["t"]), 0.001) * h
-	var w2 := w * w
-	var w3 := w2 * w
-	return p1 * (2.0 * w3 - 3.0 * w2 + 1.0) + m1 * (w3 - 2.0 * w2 + w) + p2 * (3.0 * w2 - 2.0 * w3) + m2 * (w3 - w2)
+	var reach := 3.0 * SMOOTH_SIGMA
+	var a := i
+	while a > 0 and float(frames[a - 1]["t"]) >= t - reach:
+		a -= 1
+	var b := i
+	while b < n - 1 and float(frames[b + 1]["t"]) <= t + reach:
+		b += 1
+	var k_pos := 1.0 / (2.0 * SMOOTH_SIGMA * SMOOTH_SIGMA)
+	var k_att := 1.0 / (2.0 * SMOOTH_SIGMA_ATT * SMOOTH_SIGMA_ATT)
+	var s0 := 0.0
+	var s1 := 0.0
+	var s2 := 0.0
+	var sp := Vector3.ZERO
+	var sdp := Vector3.ZERO
+	var nose := Vector3.ZERO
+	var top := Vector3.ZERO
+	for k in range(a, b + 1):
+		var f: Dictionary = frames[k]
+		var d: float = float(f["t"]) - t
+		var w := exp(-d * d * k_pos)
+		var p := Vector3(f["x"], f["y"], -f["z"])
+		s0 += w
+		s1 += w * d
+		s2 += w * d * d
+		sp += p * w
+		sdp += p * (w * d)
+		var wa := exp(-d * d * k_att)
+		var att := ys_basis(f)
+		nose -= att.z * wa
+		top += att.y * wa
+	var pos := sp / s0
+	var vel := Vector3.ZERO
+	var det := s0 * s2 - s1 * s1
+	if det > 1e-9 * s0 * s0:
+		pos = (sp * s2 - sdp * s1) / det
+		vel = (sdp * s0 - sp * s1) / det
+	var basis := ys_basis(frames[i])
+	if nose.length_squared() > 1e-8 and top.length_squared() > 1e-8 and absf(nose.normalized().dot(top.normalized())) < 0.99:
+		basis = Basis.looking_at(nose.normalized(), top.normalized())
+	return [pos, vel, basis]
 
-# An aircraft's position at any time t, on that smooth curve (held at the ends).
+# An aircraft's smoothed position / velocity (m/s) at any time t (the cinematic mode's cameras).
 func track_pos(id: String, t: float) -> Vector3:
 	var frames: Array = telemetry_data[id]
-	var i := frame_index_at(frames, t)
-	var f1: Dictionary = frames[i]
-	var f2: Dictionary = frames[mini(i + 1, frames.size() - 1)]
-	var gap: float = f2["t"] - f1["t"]
-	return _smooth(frames, i, clampf((t - f1["t"]) / gap, 0.0, 1.0) if gap > 0.0 else 0.0)
+	return _filtered(frames, frame_index_at(frames, t), t)[0]
+
+func track_vel(id: String, t: float) -> Vector3:
+	var frames: Array = telemetry_data[id]
+	return _filtered(frames, frame_index_at(frames, t), t)[1]
 
 # Velocity (m/s) around track sample idx: the move from two samples before it to three after
 # (about 0.25 s at 20 samples a second), over the time between them.

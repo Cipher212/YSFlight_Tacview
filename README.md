@@ -99,8 +99,8 @@ Every shot: Tab picks the aircraft; mouse wheel closer / further, **Ctrl+wheel**
 **Alt+wheel** background blur (focused on the aircraft), right-drag the angle; hold **Z** for a
 snap zoom, hold **X** for slow motion (it eases in and out); **Space** pauses (easing to a stop;
 orbit, crane and drone keep moving); **Backspace** is a retake from where Play was last
-pressed. The camera shakes with the G the aircraft pulls, aircraft rushing past and explosions
-nearby (View tab: Camera shake). The View tab also sets the slow motion speed, orbit speed and
+pressed. In the Flyby shot the camera shakes as aircraft rush past and with explosions nearby
+(View tab: Flyby shake); the other shots keep still. The View tab also sets the slow motion speed, orbit speed and
 crane move time, and **Keys...** changes any key (click it, press the new one).
 
 ![Cinematic mode](docs/cinematic_preview.jpg)

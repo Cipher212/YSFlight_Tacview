@@ -650,8 +650,9 @@ func _make_burn(s: Dictionary) -> void:
 	var last: Vector3 = Main.ys_position(frames[-1])
 	var last_ground := _ground_y(last)
 	while te <= t_end:
-		var p: Vector3 = Main._pos_at(frames, te)
-		var v: Vector3 = (Main._pos_at(frames, te + 0.1) - Main._pos_at(frames, te - 0.1)) / 0.2
+		var at: Array = Main._filtered(frames, Main.frame_index_at(frames, te), te)   # as drawn
+		var p: Vector3 = at[0]
+		var v: Vector3 = at[1]
 		# the ground under it matters only low down (looking it up costs a little)
 		var floor_y := _ground_y(p) if p.y < last_ground + 300.0 else -1e4
 		var gray := rng.randf_range(0.025, 0.045)

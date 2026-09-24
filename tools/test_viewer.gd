@@ -430,15 +430,63 @@ func _init():
 	check(main.camera.fov < fov_before / 2.5, "hold Z: snap zoom (%.0f -> %.0f deg)" % [fov_before, main.camera.fov])
 	z_key.pressed = false
 	Input.parse_input_event(z_key)
-	var blast: Dictionary = main.event_data["explosions"][0]
-	var bp := Vector3(blast["x"], blast["y"], -blast["z"])
-	cin.set_shot(9)
-	cin._start_drone(Transform3D(Basis.looking_at(Vector3(-1, 0, 0), Vector3.UP), bp + Vector3(150, 20, 0)))
-	main.seek(float(blast["t"]) - 0.3)
+	# network jitter (as YSFlight records an aircraft seen through the network: snapped a few metres
+	# at each update, flown on between them) is smoothed out; only the flyby shakes
+	var bandit3 := ""
+	for id in main.event_data["entities"]:
+		if main.event_data["entities"][id]["player"] == "[RED]Bandit3":
+			bandit3 = id
+	var b3: Array = main.telemetry_data[bandit3]
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7
+	var err := Vector3.ZERO
+	for k in b3.size():
+		var tk: float = b3[k]["t"]
+		if tk < 150.0 or tk > 200.0:
+			continue
+		if k % 2 == 0:                   # an update every 0.1 s: a new error of up to 4 m
+			err = Vector3(rng.randf_range(-4.0, 4.0), rng.randf_range(-1.0, 1.0), rng.randf_range(-4.0, 4.0))
+		b3[k]["x"] += err.x
+		b3[k]["y"] += err.y
+		b3[k]["z"] += err.z
+	main.follow(bandit3)
+	cin.set_shot(1)
+	main.set_playing(false)
+	cin.rate = 0.0
+	var drawn := []
+	var raw := []
+	for k in 90:
+		var tk := 170.0 + k / 60.0
+		main.seek(tk)
+		await process_frame          # (process_frame comes before the viewer's _process:
+		await process_frame          # the second one sees the aircraft moved to the new time)
+		drawn.append(main.active_aircraft[bandit3].position)
+		raw.append(main._pos_at(b3, tk))
+	var worst_drawn := 0.0
+	var worst_raw := 0.0
+	for k in range(1, 89):
+		worst_drawn = maxf(worst_drawn, (drawn[k + 1] - drawn[k] * 2.0 + drawn[k - 1]).length())
+		worst_raw = maxf(worst_raw, (raw[k + 1] - raw[k] * 2.0 + raw[k - 1]).length())
+	check(worst_raw > 1.0 and worst_drawn < worst_raw / 50.0,
+		"a jittery track (network updates) is drawn smoothly: %.3f m against %.1f m unsmoothed" % [worst_drawn, worst_raw])
+	var shaken := false
+	for n in [1, 2, 4, 5, 7]:
+		cin.set_shot(n)
+		main.set_playing(true)
+		for k in 10:
+			await process_frame
+			shaken = shaken or not main.camera.global_transform.is_equal_approx(cin.base)
+	check(not shaken, "no shake in the chase, wingman, ground camera, orbit or lock-on")
+	main.follow(tester_id)
+	main.seek(150.0)
+	cin.set_shot(3)
 	main.set_playing(true)
-	await create_timer(0.8).timeout
-	check(cin._trauma > 0.1 and not main.camera.global_transform.is_equal_approx(cin.base),
-		"an explosion 150 m away shakes the camera (%.2f)" % cin._trauma)
+	var most := 0.0
+	while main.replay_time < 150.0 + cin.FLYBY_LEAD + 0.6:
+		await process_frame
+		most = maxf(most, rad_to_deg(main.camera.global_transform.basis.z.angle_to(cin.base.basis.z)))
+	check(most > 0.05, "the flyby shakes as the aircraft rushes past (up to %.2f deg)" % most)
+	main.set_playing(false)
 	# slow motion, pause and retake
 	main.seek(100.0)
 	main.set_playing(true)
