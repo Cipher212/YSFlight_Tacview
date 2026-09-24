@@ -24,7 +24,10 @@ const ANGLE = PI / 32768.0
 const GEAR = 0
 const AFTERBURNER = 2
 const CACHE_DIR = "user://model_cache"
-const CACHE_FORMAT = 1       # raise when parse() changes, so old cached models are read again
+const CACHE_FORMAT = 2       # raise when parse() changes, so old cached models are read again
+# .srf keywords come short or long (weapon models use both): V/VER point (inside a face: its
+# point numbers), F/FAC face, C/COL colour, N/NOR normal, B/BRI bright, E/END end of face
+const SRF_WORDS = {"VER": "V", "FAC": "F", "COL": "C", "NOR": "N", "BRI": "B", "END": "E"}
 enum Kind {LIT, BRIGHT, CLEAR}
 
 static var _materials := []
@@ -258,7 +261,7 @@ static func _surf(lines: PackedStringArray) -> Dictionary:
 		var a := line.strip_edges().split(" ", false)
 		if a.is_empty():
 			continue
-		match a[0]:
+		match SRF_WORDS.get(a[0].to_upper(), a[0]):
 			"V":
 				if face == null:
 					if a.size() >= 4:

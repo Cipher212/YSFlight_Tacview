@@ -24,18 +24,18 @@ def _args(line):
 
 def _srf_points(lines):
     """Points of a .srf: its "V x y z" lines. Inside a face (F ... E) "V" lists the face's
-    point numbers instead, so those are skipped."""
+    point numbers instead, so those are skipped. Keywords come short or long (VER, FAC, END)."""
     pts, in_face = [], False
     for line in lines:
         w = line.split()
         if not w:
             continue
         k = w[0].upper()
-        if k == "F":
+        if k in ("F", "FAC"):
             in_face = True
-        elif k == "E":
+        elif k in ("E", "END"):
             in_face = False
-        elif k == "V" and not in_face and len(w) >= 4:
+        elif k in ("V", "VER") and not in_face and len(w) >= 4:
             try:
                 pts.append((float(w[1]), float(w[2]), float(w[3])))
             except ValueError:

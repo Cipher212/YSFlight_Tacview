@@ -10,25 +10,30 @@ extends Node3D
 #
 # Keys: Space play/pause, J play backwards (again: faster), K pause, L play fast (again: faster),
 # , and . one frame back/forward (Shift: 1 s), Left/Right -+10 s (Shift: 60 s), Home restart,
-# +/- speed, Tab / Shift+Tab next/previous aircraft in the air, Esc free camera, P side panel.
+# +/- speed, Tab / Shift+Tab next/previous aircraft in the air, Esc free camera, P side panel,
+# N / Shift+N next/previous kill, C / Shift+C next/previous kill or death still to review.
 # Mouse: click an aircraft to follow it, right-drag to look around, wheel to zoom. Free camera:
 # WASD, E/Q, Shift = fast.
 
 const YsAir = preload("res://ys_air.gd")
 const Fmt = preload("res://fmt.gd")
+const Paths = preload("res://paths.gd")
 const DnmModel = preload("res://dnm_model.gd")
+const WeaponModels = preload("res://weapon_models.gd")
 const SETTINGS = "user://settings.cfg"
-const AIRCRAFT_DIR = "res://aircraft"   # the aircraft's game files (.dat + .dnm), in any subfolders
+const AIRCRAFT_DIR = "aircraft"         # the aircraft's game files (.dat + .dnm), in any subfolders
 const TAG_PIXEL = 0.0007         # name tag size (times the text size setting)
 const TAG_INTERVAL = 0.2         # seconds between name tag updates
 const VECTOR_SECONDS = 1.0       # a flight path vector reaches where the aircraft will be in 1 s
 const VECTOR_COLOR = Color(1.0, 0.9, 0.25)
 const VECTOR_WIDTH_PX = 1.5
+const STRIP_NEAR = 1.0           # metres in front of the camera where the vectors are cut off
 const NOSE_COLOR = Color(0.72, 0.72, 0.72)
 # View settings (View tab, saved in settings.cfg as "view_<key>")
 const VIEW_DEFAULTS = {"aircraft_scale": 1.0, "weapon_scale": 1.0, "text_scale": 1.0,
-	"trail_seconds": 30.0, "ribbons": true, "vectors": true, "tags": true, "tethers": true,
-	"markers": true, "ground": true, "clouds": true, "blocky": false, "smoke": true}
+	"trail_seconds": 30.0, "ribbon_width": 1.0, "marker_seconds": 30.0, "ribbons": true,
+	"vectors": true, "tags": true, "tethers": true, "markers": true, "ground": true, "clouds": true,
+	"blocky": false, "smoke": true}
 
 var camera: Camera3D
 var cam_rot_x: float = -0.5
@@ -73,6 +78,8 @@ var _dnm_models := {}            # .dnm path -> built model, shared by every air
 var _ground_script: GDScript
 var _ground_index := {}          # ground object .dat -> its model file (from the ground lists)
 var _ground_meshes := {}         # ground model path -> mesh (null if it has no faces)
+var _weapon_index := {}          # which model each aircraft's weapons use (weapon_models.gd)
+var _weapon_meshes := {}         # weapon model path -> mesh (null if it has no faces)
 
 func _ready():
 	get_window().mode = Window.MODE_MAXIMIZED
@@ -112,11 +119,13 @@ func _ready():
 	ui.show_start_menu(last)
 
 func _newest_event() -> String:
-	var dir := ProjectSettings.globalize_path("res://events")
+	var dir := Paths.of("events")
 	var newest := ""
 	var newest_time := 0
+	if not DirAccess.dir_exists_absolute(dir):
+		return ""
 	for f in DirAccess.get_files_at(dir):
-		if f.ends_with(".json"):
+		if f.ends_with(".json") or f.ends_with(".json.gz"):
 			var when := FileAccess.get_modified_time(dir + "/" + f)
 			if when > newest_time:
 				newest = dir + "/" + f
@@ -251,14 +260,14 @@ static func iff_color(iff) -> Color:
 # --- EVENTS: build from replays, load, clear ---
 
 func build_event(replays: PackedStringArray, fld_path: String) -> void:
-	var dir := ProjectSettings.globalize_path("res://events")
+	var dir := Paths.of("events")
 	DirAccess.make_dir_recursive_absolute(dir)
 	if not FileAccess.file_exists(dir + "/.gdignore"):
 		FileAccess.open(dir + "/.gdignore", FileAccess.WRITE)   # keep Godot from importing events
 	var stem := replays[0].get_file().get_basename().validate_filename()
 	if replays.size() > 1:
 		stem += "_and_%d_more" % (replays.size() - 1)
-	var out := "%s/%s.json" % [dir, stem]
+	var out := "%s/%s.json.gz" % [dir, stem]      # compressed: several times smaller
 	set_playing(false)
 	ui.show_busy(0, "Building the event from %d replay file(s)..." % replays.size())
 	builder.build(replays, fld_path, out)
@@ -279,20 +288,29 @@ func load_event(path: String) -> void:
 	set_playing(false)
 	ui.hide_start_menu()
 	ui.show_busy(50, "Loading %s ..." % path.get_file())
-	_dnm_index = DnmModel.index_models(ProjectSettings.globalize_path(AIRCRAFT_DIR))
+	_dnm_index = DnmModel.index_models(Paths.of(AIRCRAFT_DIR))
 	_ground_index = _ground_script.index_models()
+	_weapon_index = WeaponModels.index()
 	_load_thread = Thread.new()
 	_load_thread.start(_read_event.bind(path, map_node.field if map_node != null else ""))
 
+# An event file's text: gzip-compressed (.json.gz, what the pipeline writes now) or plain (.json).
+static func read_event_text(path: String) -> String:
+	if path.to_lower().ends_with(".gz"):
+		var packed := FileAccess.get_file_as_bytes(path)
+		return packed.decompress_dynamic(-1, FileAccess.COMPRESSION_GZIP).get_string_from_utf8()
+	return FileAccess.get_file_as_string(path)
+
 # Everything slow happens here, off the main thread: reading the event and its map, building the
-# ribbons, and reading the aircraft and ground-object models not read before. `extra` carries
-# the results: ribbons, aircraft models, ground models, and each ground object's model path.
+# ribbons, and reading the aircraft, ground-object and weapon models not read before. `extra`
+# carries the results: ribbons, the models, each ground object's and each weapon's model path.
 func _read_event(path: String, loaded_field: String) -> void:   # loader thread
 	var json := JSON.new()
-	var err := json.parse(FileAccess.get_file_as_string(path))
+	var err := json.parse(read_event_text(path))
 	var data = json.data if err == OK else null
 	var map_data = null
-	var extra := {"strips": {}, "aircraft": {}, "ground": {}, "ground_paths": {}}
+	var extra := {"strips": {}, "aircraft": {}, "ground": {}, "weapon": {}, "ground_paths": {},
+		"weapon_paths": {}}
 	if typeof(data) == TYPE_DICTIONARY and data.has("entities"):
 		if data.get("field", "") != loaded_field:
 			var map_path := map_path_for(data)
@@ -301,14 +319,15 @@ func _read_event(path: String, loaded_field: String) -> void:   # loader thread
 				if mj.parse(FileAccess.get_file_as_string(map_path)) == OK:
 					map_data = mj.data
 		extra["strips"] = _ribbon_script.build_arrays(data["entities"])
-		# models not read yet: [path, ground object?, result], read on all cores at once
+		# models not read yet: [path, "aircraft" / "ground" / "weapon", result], read on all
+		# cores at once
 		var jobs := []
 		var queued := {}
 		for id in data["entities"]:
 			var model_path = _dnm_index.get(str(data["entities"][id].get("aircraft", "")).to_upper())
 			if model_path != null and not _dnm_models.has(model_path) and not queued.has(model_path):
 				queued[model_path] = true
-				jobs.append([model_path, false, {}])
+				jobs.append([model_path, "aircraft", {}])
 		for g in data.get("ground_objects", []):
 			var model_path: String = _ground_script.model_path(g, _ground_index)
 			if model_path == "":
@@ -316,13 +335,28 @@ func _read_event(path: String, loaded_field: String) -> void:   # loader thread
 			extra["ground_paths"][int(g["index"])] = model_path
 			if not _ground_meshes.has(model_path) and not queued.has(model_path + "|g"):
 				queued[model_path + "|g"] = true
-				jobs.append([model_path, true, {}])
+				jobs.append([model_path, "ground", {}])
+		var weapons: Array = data.get("weapons", [])
+		for i in weapons.size():
+			var w: Dictionary = weapons[i]
+			var owner = w.get("owner_ref")
+			var shooter := ""
+			if owner != null and owner["kind"] == "aircraft":
+				shooter = str(data["entities"].get(str(int(owner["id"])), {}).get("aircraft", ""))
+			var model_path := WeaponModels.model_for(str(w.get("name", "")), shooter, _weapon_index)
+			if model_path == "":
+				continue
+			extra["weapon_paths"][i] = model_path
+			if not _weapon_meshes.has(model_path) and not queued.has(model_path + "|w"):
+				queued[model_path + "|w"] = true
+				jobs.append([model_path, "weapon", {}])
 		if jobs.size() > 0:
 			var task := WorkerThreadPool.add_group_task(
-				func(i): jobs[i][2]["model"] = DnmModel.load_or_parse(jobs[i][0], jobs[i][1]), jobs.size())
+				func(i): jobs[i][2]["model"] = DnmModel.load_or_parse(jobs[i][0], jobs[i][1] != "aircraft"),
+				jobs.size())
 			WorkerThreadPool.wait_for_group_task_completion(task)
 		for job in jobs:
-			extra["ground" if job[1] else "aircraft"][job[0]] = job[2]["model"]
+			extra[job[1]][job[0]] = job[2]["model"]
 	_event_read.call_deferred(path, data, json.get_error_message(), map_data, extra)
 
 func _event_read(path: String, data, error_text: String, map_data, extra: Dictionary) -> void:
@@ -332,6 +366,8 @@ func _event_read(path: String, data, error_text: String, map_data, extra: Dictio
 		_dnm_models[model_path] = DnmModel.build(extra["aircraft"][model_path])
 	for model_path in extra["ground"]:
 		_ground_meshes[model_path] = DnmModel.build(extra["ground"][model_path])["groups"][0]["mesh"]
+	for model_path in extra["weapon"]:
+		_weapon_meshes[model_path] = DnmModel.build(extra["weapon"][model_path])["groups"][0]["mesh"]
 	if typeof(data) != TYPE_DICTIONARY or not data.has("entities"):
 		ui.hide_busy()
 		ui.set_status("Could not read %s: %s" % [path.get_file(), error_text])
@@ -348,7 +384,7 @@ func _event_read(path: String, data, error_text: String, map_data, extra: Dictio
 	spawn_aircraft(data)
 	combat = load("res://combat_layer.gd").new()
 	event_root.add_child(combat)
-	combat.setup(data)
+	combat.setup(data, {"meshes": _weapon_meshes, "paths": extra["weapon_paths"]})
 	ribbons = _ribbon_script.new()
 	event_root.add_child(ribbons)
 	ribbons.setup(extra["strips"])
@@ -372,7 +408,7 @@ static func map_path_for(data: Dictionary) -> String:
 		var re := RegEx.new()
 		re.compile("[^A-Za-z0-9]+")
 		name = re.sub(str(data.get("field", "")), "_", true).lstrip("_").rstrip("_").to_upper() + ".json"
-	return ProjectSettings.globalize_path("res://maps/" + name)
+	return Paths.of("maps/" + name)
 
 func show_map(data) -> void:
 	if map_node != null:
@@ -618,6 +654,7 @@ func seek(t):
 	replay_time = clamp(t, t_min, t_max)
 	for air_id in telemetry_data:
 		current_frame_indices[air_id] = frame_index_at(telemetry_data[air_id], replay_time)
+	ui.refresh(replay_time, playing, playback_speed, play_direction)   # (its clock is "now" for N / C)
 
 # Index of the last frame at or before time t (0 if t is before the first frame).
 static func frame_index_at(frames, t) -> int:
@@ -660,6 +697,7 @@ func _draw_vectors(items: Array, size: float) -> void:
 	if items.is_empty():
 		return
 	var cam := camera.global_position
+	var fwd := -camera.global_transform.basis.z
 	# size of one screen pixel 1 m in front of the camera (window height in real pixels: the UI's
 	# stretch mode gives the viewport rect in scaled units)
 	var pixel := 2.0 * tan(deg_to_rad(camera.fov) * 0.5) / maxf(get_window().size.y, 1.0)
@@ -678,10 +716,10 @@ func _draw_vectors(items: Array, size: float) -> void:
 		var side := dir.cross(cam - tip)             # arrow head flat towards the camera
 		side = side.normalized() * length * 0.05 if side.length_squared() > 1e-9 else Vector3.ZERO
 		var back := tip - dir * length * 0.12
-		_strip(verts, cols, p, tip, VECTOR_COLOR, cam, half)
-		_strip(verts, cols, tip, back + side, VECTOR_COLOR, cam, half)
-		_strip(verts, cols, tip, back - side, VECTOR_COLOR, cam, half)
-		_strip(verts, cols, p, p + it[2].normalized() * length, NOSE_COLOR, cam, half)
+		_strip(verts, cols, p, tip, VECTOR_COLOR, cam, fwd, half)
+		_strip(verts, cols, tip, back + side, VECTOR_COLOR, cam, fwd, half)
+		_strip(verts, cols, tip, back - side, VECTOR_COLOR, cam, fwd, half)
+		_strip(verts, cols, p, p + it[2].normalized() * length, NOSE_COLOR, cam, fwd, half)
 	if verts.is_empty():
 		return
 	var arrays := []
@@ -691,9 +729,19 @@ func _draw_vectors(items: Array, size: float) -> void:
 	vectors.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 
 # A line from a to b as two triangles facing the camera; each end as wide as `half` times its
-# distance from the camera (so the same number of pixels everywhere).
+# distance from the camera (so the same number of pixels everywhere). Only the part in front of
+# the camera (fwd: where it looks) is drawn: a line reaching past the camera would otherwise
+# blow up into a wide beam across the screen.
 static func _strip(verts: PackedVector3Array, cols: PackedColorArray, a: Vector3, b: Vector3, c: Color,
-		cam: Vector3, half: float) -> void:
+		cam: Vector3, fwd: Vector3, half: float) -> void:
+	var da := (a - cam).dot(fwd)
+	var db := (b - cam).dot(fwd)
+	if da < STRIP_NEAR and db < STRIP_NEAR:
+		return
+	if da < STRIP_NEAR:
+		a = a.lerp(b, (STRIP_NEAR - da) / (db - da))
+	elif db < STRIP_NEAR:
+		b = b.lerp(a, (STRIP_NEAR - db) / (da - db))
 	var d := b - a
 	if d.length_squared() < 1e-6:
 		return
@@ -733,7 +781,7 @@ func _apply_view() -> void:
 	if combat:
 		combat.set_view(view)
 	if ribbons:
-		ribbons.set_view(view["ribbons"], view["trail_seconds"], view["aircraft_scale"], view["smoke"])
+		ribbons.set_view(view["ribbons"], view["trail_seconds"], view["ribbon_width"], view["smoke"])
 	if grounds:
 		grounds.visible = view["ground"]
 		grounds.show_clouds(view["clouds"])
@@ -841,6 +889,10 @@ func _unhandled_input(event):
 				seek(replay_time + (60.0 if event.shift_pressed else 10.0))
 			KEY_HOME:
 				restart()
+			KEY_N:
+				ui.jump_kill(-1 if event.shift_pressed else 1)
+			KEY_C:
+				ui.jump_check(-1 if event.shift_pressed else 1)
 			KEY_EQUAL, KEY_PLUS, KEY_KP_ADD:
 				playback_speed = min(playback_speed * 2.0, 512.0)
 				ui.show_speed(playback_speed)

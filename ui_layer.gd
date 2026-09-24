@@ -3,10 +3,14 @@ extends CanvasLayer
 #   start menu : continue with the last event, open a saved one, or build a new one from
 #                replays (.yfs) and the map (.fld) they were flown on
 #   top bar    : menu, open event, side panel on/off, restart, jump to a time
-#   bottom bar : kill ticks, full-length time slider, play/pause, -+10 s, clock, speed
-#   side panel : Pilots (sorties and how they ended), Kills (click to jump there), Files,
-#                View (sizes of aircraft / weapons / text, what is drawn)
-#   top left   : the aircraft the camera follows (text set by the main scene)
+#   bottom bar : kill ticks (upper row) and death ticks (lower row), the full-length time slider,
+#                play/pause, -+10 s, clock, speed
+#   side panel : a search box and a review filter, buttons to the previous/next kill and CHECK,
+#                the tabs Pilots (sorties and how they ended), Kills, Deaths, Messages (click to
+#                jump there), Files, View (sizes, what is drawn); under them the full story of the
+#                kill or death picked and its review: confirmed / rejected and a note, saved in a
+#                file next to the event (review.gd)
+#   bottom left: the aircraft the camera follows (text set by the main scene)
 # The main scene (node_3d.gd) listens to the signals and calls show_event() / refresh().
 
 signal open_replays(paths: PackedStringArray, fld_path: String)
@@ -28,27 +32,41 @@ signal panel_toggled(shown: bool)
 
 const Main = preload("res://node_3d.gd")
 const Fmt = preload("res://fmt.gd")
+const Paths = preload("res://paths.gd")
+const Review = preload("res://review.gd")
 const SPEEDS = [0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0]
 const PANEL_W = 480.0
 const TEAM_NAMES = {1: "BLUE (IFF 1)", 4: "RED (IFF 4)", 0: "OTHER / NEUTRAL"}
 const DEATHS = ["killed", "shot_down", "collision", "crashed", "overg", "unknown", "went_down"]
+const QUIET = ["end", "ground_exit"]      # endings that aren't losses: folded away in the Deaths list
 const CHECK_COLOR = Color(1.0, 0.72, 0.35)
+const CONFIRMED_COLOR = Color(0.55, 0.9, 0.55)
+const REJECTED_COLOR = Color(1.0, 0.5, 0.45)
+const CLAIM_COLOR = Color(0.6, 0.6, 0.6)
+const SHOW = ["Show all", "To review (CHECK, not marked yet)", "Not marked yet", "Confirmed",
+	"Rejected"]
+enum Show {ALL, TO_REVIEW, UNMARKED, CONFIRMED, REJECTED}
 # View tab: [key, label, min, max, exponential, format] sliders and [key, label] switches
 const VIEW_SLIDERS = [
 	["aircraft_scale", "Aircraft size", 1.0, 50.0, true, "%.1fx"],
 	["weapon_scale", "Weapon size", 1.0, 50.0, true, "%.1fx"],
 	["text_scale", "Text size", 0.5, 3.0, false, "%.2fx"],
-	["trail_seconds", "Ribbon length", 0.0, 120.0, false, "%d s"]]
+	["trail_seconds", "Ribbon length", 0.0, 120.0, false, "%d s"],
+	["ribbon_width", "Ribbon width", 0.5, 10.0, true, "%.1fx"],
+	["marker_seconds", "Markers stay", 5.0, 300.0, true, "%d s"]]
 const VIEW_SWITCHES = [
 	["ribbons", "Energy ribbons (speed: red slow, yellow, green fast)"],
 	["smoke", "Black smoke behind aircraft going down"],
 	["vectors", "Flight path vectors (yellow) and nose lines (grey)"],
 	["tags", "Name tags with altitude and speed"],
 	["tethers", "Missile tethers with distance to target"],
-	["markers", "Detonation and kill markers"],
+	["markers", "Markers: a ball where each weapon ended (bright = hit, dark = missed) and a cross at each kill"],
 	["ground", "Ground objects"],
 	["clouds", "Clouds (see-through blocks)"],
 	["blocky", "Blocky placeholder aircraft instead of the game models (faster)"]]
+const TRAIL_HELP = "Weapon trails, in the shooter's team colour: solid line = air-to-air missile, " + \
+	"dashed = air-to-ground missile, dots = bomb (grey dots: a dropped fuel tank), short streak = " + \
+	"rocket, short thin lines = gun rounds."
 
 var top_bar: PanelContainer
 var bottom_bar: PanelContainer
@@ -60,14 +78,25 @@ var slider: HSlider
 var ticks: Control
 var play_button: Button
 var play_state: Label
+var notice: Label
 var panel_button: Button
 var speed_menu: OptionButton
 var speed_edit: LineEdit
 var jump_edit: LineEdit
+var search: LineEdit
+var show_filter: OptionButton
+var review_label: Label
+var tabs: TabContainer
 var pilots: Tree
 var kills_tree: Tree
 var deaths_tree: Tree
+var messages_tree: Tree
 var details: RichTextLabel
+var review_box: VBoxContainer
+var confirm_button: Button
+var reject_button: Button
+var review_state: Label
+var note_edit: LineEdit
 var files_text: RichTextLabel
 var busy: Control
 var busy_label: Label
@@ -85,12 +114,29 @@ var menu_note: Label
 var menu_last := ""
 var menu_replays := PackedStringArray()
 var fields = []           # [field name, .fld path] from the scenery lists (and any browsed to)
+var review = Review.new()
 
+var _data := {}
 var _entities = {}
 var _grounds = []
 var _kill_marks = []      # [t, colour]
 var _t_min := 0.0
 var _t_max := 1.0
+var _now := 0.0
+# Every kill ("k<n>"), unconfirmed credit ("c<n>") and ending ("d<aircraft id>") of the event:
+# {"kind", "t", "line" (its text in the lists), "color", "check", "details", "about" (what the
+# review file keeps about it), "k" (the kill) or "entity", "quiet"}
+var _items := {}
+var _kill_order := []     # kill ids by time
+var _check_order := []    # ids of the kills and deaths marked CHECK, by time
+var _death_order := []    # ids of the endings that are losses, by time (timeline ticks)
+var _tree_items := {}     # item id -> its TreeItem in the lists as filled now
+var _pilot_items := {}    # aircraft id -> its sortie's TreeItem in the Pilots list
+var _selected := ""       # the item picked last
+var _selecting := false   # an item is being selected from code (its signal is ignored)
+var _note_dirty := false
+var _note_clock := 0.0
+var _notice_clock := 0.0
 
 func _ready() -> void:
 	var root := Control.new()
@@ -118,9 +164,21 @@ func _ready() -> void:
 	bottom_bar.resized.connect(_layout)
 	_layout.call_deferred()
 
+func _process(delta: float) -> void:
+	if _note_dirty:                  # a note is saved once typing pauses
+		_note_clock += delta
+		if _note_clock > 0.8:
+			_commit_note()
+	if _notice_clock > 0.0:
+		_notice_clock -= delta
+		if _notice_clock <= 0.0:
+			notice.text = ""
+
 # --- called by the main scene ---
 
 func show_event(data: Dictionary, t_min: float, t_max: float, path: String) -> void:
+	_commit_note()
+	_data = data
 	_entities = data.get("entities", {})
 	_grounds = data.get("ground_objects", [])
 	_t_min = t_min
@@ -134,10 +192,16 @@ func show_event(data: Dictionary, t_min: float, t_max: float, path: String) -> v
 	status.text = "%s  |  %s  |  %d files  |  %d sorties  |  %d kills" % [
 		path.get_file(), data.get("map", data.get("field", "")), maxi(used, 1),
 		_entities.size(), data.get("kills", []).size()]
-	_fill_pilots(data)
-	_fill_kills(data)
-	_fill_deaths(data)
+	_selected = ""
+	details.visible = false
+	review_box.visible = false
+	_build_items(data)
+	var abouts := {}
+	for id in _items:
+		abouts[id] = _items[id]["about"]
+	review.load_for(path, abouts)
 	_fill_files(data)
+	_refill()
 	_kill_marks.clear()
 	for k in data.get("kills", []):
 		_kill_marks.append([k["t"], Main.iff_color(_ref_iff(k.get("killer_ref"))).lightened(0.2)])
@@ -145,6 +209,7 @@ func show_event(data: Dictionary, t_min: float, t_max: float, path: String) -> v
 
 # direction: 1 forwards, -1 backwards; the clock also shows whole seconds (what scorers note down)
 func refresh(t: float, playing: bool, speed := 1.0, direction := 1) -> void:
+	_now = t
 	slider.set_value_no_signal(t)
 	time_label.text = "%s (%d s) / %s" % [Fmt.clock(t), int(t), Fmt.clock(_t_max)]
 	play_button.text = "Pause" if playing else "Play"
@@ -197,6 +262,15 @@ func hide_start_menu() -> void:
 func feed_margins() -> Vector2:
 	# (right, top) space the live kill feed should keep clear of
 	return Vector2((PANEL_W if side_panel.visible else 0.0) + 16.0, top_bar.size.y + 8.0)
+
+# Next (1) or previous (-1) kill from now; right after one was picked, from that one.
+func jump_kill(direction: int) -> void:
+	_jump(_kill_order, direction, "kill")
+
+# Next (1) or previous (-1) kill or death still to review: marked CHECK, not confirmed or
+# rejected yet.
+func jump_check(direction: int) -> void:
+	_jump(_check_order.filter(func(id): return review.status(id) == ""), direction, "CHECK to review")
 
 # How a sortie ended, in a line: the most likely cause with its likelihood, and the runner-up if
 # it is a real alternative (events built before the likelihoods: the old wording).
@@ -274,8 +348,9 @@ func _build_bottom(root: Control) -> void:
 	var col := VBoxContainer.new()
 	bottom_bar.add_child(col)
 	ticks = Control.new()
-	ticks.custom_minimum_size.y = 8
-	ticks.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ticks.custom_minimum_size.y = 12
+	ticks.mouse_filter = Control.MOUSE_FILTER_PASS         # for its tooltip
+	ticks.tooltip_text = "Upper row: kills (shooter's team colour). Lower row: losses (the pilot's team colour; orange = CHECK)"
 	ticks.draw.connect(_draw_ticks)
 	ticks.resized.connect(ticks.queue_redraw)
 	col.add_child(ticks)
@@ -328,33 +403,60 @@ func _build_side(root: Control) -> void:
 	side_panel.anchor_bottom = 1.0
 	side_panel.offset_left = -PANEL_W
 	root.add_child(side_panel)
-	# the tabs, and under them the full story of the kill or death picked in the Kills / Deaths tab
+	# search and review filter, the tabs, and under them the full story of the kill or death
+	# picked, with its review
 	var column := VBoxContainer.new()
 	side_panel.add_child(column)
-	var tabs := TabContainer.new()
+	var find_row := HBoxContainer.new()
+	column.add_child(find_row)
+	find_row.add_child(_label("Find:"))
+	search = LineEdit.new()
+	search.placeholder_text = "pilot name or words"
+	search.clear_button_enabled = true
+	search.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	search.tooltip_text = "Shows only the pilots, kills, deaths and messages containing this text"
+	search.text_changed.connect(func(_text): _refill())
+	search.text_submitted.connect(func(_text): search.release_focus())
+	find_row.add_child(search)
+	show_filter = OptionButton.new()
+	for s in SHOW:
+		show_filter.add_item(s)
+	show_filter.select(Show.ALL)
+	show_filter.focus_mode = Control.FOCUS_NONE
+	show_filter.fit_to_longest_item = false
+	show_filter.custom_minimum_size.x = 150
+	show_filter.tooltip_text = "Which kills and deaths the Kills and Deaths lists show"
+	show_filter.item_selected.connect(func(_i): _refill())
+	find_row.add_child(show_filter)
+	var jump_row := HBoxContainer.new()
+	column.add_child(jump_row)
+	_tip(_button(jump_row, "< Kill", func(): jump_kill(-1)), "Previous kill (Shift+N)")
+	_tip(_button(jump_row, "Kill >", func(): jump_kill(1)), "Next kill (N)")
+	_tip(_button(jump_row, "< CHECK", func(): jump_check(-1)), "Previous kill or death still to review (Shift+C)")
+	_tip(_button(jump_row, "CHECK >", func(): jump_check(1)),
+		"Next kill or death still to review: marked CHECK and not yet confirmed or rejected (C)")
+	notice = _label("")
+	notice.add_theme_color_override("font_color", CHECK_COLOR)
+	notice.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	notice.clip_text = true
+	jump_row.add_child(notice)
+	review_label = _label("")
+	review_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	column.add_child(review_label)
+	tabs = TabContainer.new()
 	tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	column.add_child(tabs)
 	details = RichTextLabel.new()
-	details.custom_minimum_size.y = 220
+	details.custom_minimum_size.y = 200
 	details.selection_enabled = true
 	details.scroll_active = true
 	details.visible = false
 	column.add_child(details)
-	pilots = Tree.new()
-	pilots.name = "Pilots"
-	pilots.hide_root = true
-	pilots.item_selected.connect(_on_pilot_item)
-	tabs.add_child(pilots)
-	kills_tree = Tree.new()
-	kills_tree.name = "Kills"
-	kills_tree.hide_root = true
-	kills_tree.item_selected.connect(_on_kill_item)
-	tabs.add_child(kills_tree)
-	deaths_tree = Tree.new()
-	deaths_tree.name = "Deaths"
-	deaths_tree.hide_root = true
-	deaths_tree.item_selected.connect(_on_death_item)
-	tabs.add_child(deaths_tree)
+	_build_review(column)
+	pilots = _tree(tabs, "Pilots", _on_pilot_item)
+	kills_tree = _tree(tabs, "Kills", _on_list_item.bind("Kills"))
+	deaths_tree = _tree(tabs, "Deaths", _on_list_item.bind("Deaths"))
+	messages_tree = _tree(tabs, "Messages", _on_message_item)
 	files_text = RichTextLabel.new()
 	files_text.name = "Files"
 	files_text.bbcode_enabled = true
@@ -362,11 +464,38 @@ func _build_side(root: Control) -> void:
 	tabs.add_child(files_text)
 	_build_view(tabs)
 
-func _build_view(tabs: TabContainer) -> void:
+# Under the details: Confirm / Reject (pressed again: undone), Clear, and a note.
+func _build_review(column: VBoxContainer) -> void:
+	review_box = VBoxContainer.new()
+	review_box.visible = false
+	column.add_child(review_box)
+	var row := HBoxContainer.new()
+	review_box.add_child(row)
+	row.add_child(_label("Review:"))
+	confirm_button = _button(row, "Confirm", func(): _toggle_status("confirmed"))
+	confirm_button.tooltip_text = "This kill or ending is right (press again to undo)"
+	confirm_button.toggle_mode = true
+	reject_button = _button(row, "Reject", func(): _toggle_status("rejected"))
+	reject_button.tooltip_text = "This kill or ending is wrong; say why in the note (press again to undo)"
+	reject_button.toggle_mode = true
+	_tip(_button(row, "Clear", _clear_mark), "Remove this review and its note")
+	review_state = _label("")
+	review_state.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	review_state.clip_text = true
+	row.add_child(review_state)
+	note_edit = LineEdit.new()
+	note_edit.placeholder_text = "Note (saved with the review)"
+	note_edit.clear_button_enabled = true
+	note_edit.text_changed.connect(_on_note_changed)
+	note_edit.text_submitted.connect(_on_note_submitted)
+	note_edit.focus_exited.connect(_commit_note)
+	review_box.add_child(note_edit)
+
+func _build_view(tabs_node: TabContainer) -> void:
 	var scroll := ScrollContainer.new()
 	scroll.name = "View"
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	tabs.add_child(scroll)
+	tabs_node.add_child(scroll)
 	var v := VBoxContainer.new()
 	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	v.add_theme_constant_override("separation", 8)
@@ -380,20 +509,20 @@ func _build_view(tabs: TabContainer) -> void:
 		var name_label := _label(s[1])
 		name_label.custom_minimum_size.x = 120
 		row.add_child(name_label)
-		var slider := HSlider.new()
-		slider.min_value = s[2]
-		slider.max_value = s[3]
-		slider.exp_edit = s[4]
-		slider.step = 0.05 if s[3] <= 50.0 else 1.0
-		slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		slider.focus_mode = Control.FOCUS_NONE
-		slider.value_changed.connect(_on_view_slider.bind(s[0]))
-		row.add_child(slider)
+		var view_slider := HSlider.new()
+		view_slider.min_value = s[2]
+		view_slider.max_value = s[3]
+		view_slider.exp_edit = s[4]
+		view_slider.step = 0.05 if s[3] <= 50.0 else 1.0
+		view_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		view_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		view_slider.focus_mode = Control.FOCUS_NONE
+		view_slider.value_changed.connect(_on_view_slider.bind(s[0]))
+		row.add_child(view_slider)
 		var value := _label("")
 		value.custom_minimum_size.x = 56
 		row.add_child(value)
-		view_controls[s[0]] = slider
+		view_controls[s[0]] = view_slider
 		view_values[s[0]] = value
 	v.add_child(HSeparator.new())
 	v.add_child(_label("Show"))
@@ -405,6 +534,10 @@ func _build_view(tabs: TabContainer) -> void:
 		box.toggled.connect(func(on): view_changed.emit(s[0], on))
 		v.add_child(box)
 		view_controls[s[0]] = box
+	v.add_child(HSeparator.new())
+	var help := _label(TRAIL_HELP)
+	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	v.add_child(help)
 
 func _build_start_menu(root: Control) -> void:
 	start_menu = CenterContainer.new()
@@ -485,16 +618,16 @@ func _build_dialogs() -> void:
 	replay_dialog.filters = PackedStringArray(["*.yfs ; YSFlight replays"])
 	replay_dialog.use_native_dialog = true
 	replay_dialog.title = "Replays of ONE event (several players' files are merged)"
-	replay_dialog.current_dir = ProjectSettings.globalize_path("res://Raw_Data")
+	replay_dialog.current_dir = Paths.of("Raw_Data")
 	replay_dialog.files_selected.connect(_on_replays_picked)
 	add_child(replay_dialog)
 	event_dialog = FileDialog.new()
 	event_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 	event_dialog.access = FileDialog.ACCESS_FILESYSTEM
-	event_dialog.filters = PackedStringArray(["*.json ; Event files"])
+	event_dialog.filters = PackedStringArray(["*.json.gz, *.json ; Event files"])
 	event_dialog.use_native_dialog = true
 	event_dialog.title = "Open an event built earlier"
-	event_dialog.current_dir = ProjectSettings.globalize_path("res://events")
+	event_dialog.current_dir = Paths.of("events")
 	event_dialog.file_selected.connect(open_event.emit)
 	add_child(event_dialog)
 	fld_dialog = FileDialog.new()
@@ -503,7 +636,7 @@ func _build_dialogs() -> void:
 	fld_dialog.filters = PackedStringArray(["*.fld ; YSFlight maps"])
 	fld_dialog.use_native_dialog = true
 	fld_dialog.title = "The map (.fld) the replays were flown on"
-	fld_dialog.current_dir = ProjectSettings.globalize_path("res://gamefiles")
+	fld_dialog.current_dir = Paths.of("gamefiles")
 	fld_dialog.file_selected.connect(_on_fld_picked)
 	add_child(fld_dialog)
 
@@ -514,14 +647,188 @@ func _layout() -> void:
 	info.offset_bottom = -bottom_bar.size.y - 6
 	layout_changed.emit()
 
-# --- lists ---
+func _tree(tabs_node: TabContainer, title: String, on_pick: Callable) -> Tree:
+	var tree := Tree.new()
+	tree.name = title
+	tree.hide_root = true
+	tree.item_selected.connect(on_pick)
+	tabs_node.add_child(tree)
+	return tree
 
-func _fill_pilots(data: Dictionary) -> void:
+# --- the kills and deaths, and their review ---
+
+# Every kill, unconfirmed credit and ending, with its text; the lists are filled from these.
+func _build_items(data: Dictionary) -> void:
+	_items.clear()
+	_kill_order.clear()
+	_check_order.clear()
+	_death_order.clear()
+	var loadouts := {}
+	for lo in data.get("loadouts", []):
+		var key := str(int(lo["id"]))
+		if not loadouts.has(key):
+			loadouts[key] = []
+		loadouts[key].append(lo)
+	_data["_loadouts"] = loadouts
+	var kills: Array = data.get("kills", [])
+	for n in kills.size():
+		var k: Dictionary = kills[n]
+		var id := "k%d" % n
+		var line := "%s (%d s)  %s  %s ->  %s" % [Fmt.clock(k["t"]), int(k["t"]),
+			_ref_name(k.get("killer_ref")), Fmt.weapon(k["name"]), _ref_name(k.get("victim_ref"))]
+		if k.has("confidence"):
+			line += "  %d%%" % roundi(k["confidence"] * 100.0)
+		var notes := []
+		if k.get("other_claims", []).size() > 0:
+			notes.append("disputed")
+		if not k.get("verified", true):
+			notes.append("death not seen")
+		if notes.size() > 0:
+			line += "  (" + ", ".join(notes) + ")"
+		_items[id] = {"kind": "kill", "t": float(k["t"]), "k": k, "line": line,
+			"color": Main.iff_color(_ref_iff(k.get("killer_ref"))).lightened(0.45),
+			"check": bool(k.get("check", notes.size() > 0)), "details": _kill_details(k),
+			"about": {"kind": "kill", "t": float(k["t"]), "victim": _ref_name(k.get("victim_ref")),
+				"killer": _ref_name(k.get("killer_ref")), "weapon": str(k["name"])}}
+		_kill_order.append(id)
+	var claims: Array = data.get("unconfirmed_kills", [])
+	for n in claims.size():
+		var k: Dictionary = claims[n]
+		_items["c%d" % n] = {"kind": "claim", "t": float(k["t"]), "k": k, "check": false,
+			"line": "%s (%d s)  %s  %s ->  %s" % [Fmt.clock(k["t"]), int(k["t"]),
+				_ref_name(k.get("killer_ref")), Fmt.weapon(k["name"]), _ref_name(k.get("victim_ref"))],
+			"color": CLAIM_COLOR,
+			"details": "Recorded in %d game(s): %s" % [k.get("recorded_in", []).size(), k.get("reason", "")],
+			"about": {"kind": "claim", "t": float(k["t"]), "victim": _ref_name(k.get("victim_ref")),
+				"killer": _ref_name(k.get("killer_ref")), "weapon": str(k["name"])}}
+	for eid in _entities:
+		var e: Dictionary = _entities[eid]
+		var fate: Dictionary = e.get("fate", {})
+		if fate.is_empty() or fate.get("kind", "") == "none":
+			continue
+		var t := float(fate.get("t", 0.0))
+		var text := fate_details(fate)
+		for lo in loadouts.get(str(eid), []):
+			text += "\nLoadout at %s: %s" % [Fmt.clock(lo["t"]), Fmt.loadout(lo["cfg"])]
+		_items["d" + str(eid)] = {"kind": "death", "t": t, "entity": str(eid),
+			"quiet": fate.get("kind", "") in QUIET, "check": bool(fate.get("check", false)),
+			"line": "%s (%d s)  %s (%s):  %s" % [Fmt.clock(t), int(t), e["player"],
+				Fmt.short_type(e["aircraft"]), fate_text(fate)],
+			"color": Main.iff_color(int(e.get("iff", 0))).lightened(0.45), "details": text.strip_edges(),
+			"about": {"kind": "death", "t": t, "player": str(e["player"]), "aircraft": str(e["aircraft"])}}
+	var by_time := func(a, b): return _items[a]["t"] < _items[b]["t"] or \
+		(_items[a]["t"] == _items[b]["t"] and a < b)
+	_kill_order.sort_custom(by_time)
+	for id in _items:
+		var it: Dictionary = _items[id]
+		if it["check"] and it["kind"] != "claim":
+			_check_order.append(id)
+		if it["kind"] == "death" and not it["quiet"]:
+			_death_order.append(id)
+	_check_order.sort_custom(by_time)
+	_death_order.sort_custom(by_time)
+
+func _kill_details(k: Dictionary) -> String:
+	var tip := "Credit from %s; recorded in %d of %d games that were there" % [
+		k.get("basis", "the replay"), k.get("seen_by", 1), maxi(int(k.get("covered_by", 1)), 1)]
+	for c in k.get("other_claims", []):
+		tip += "\nAlso claimed: %s  %s  (%d games)" % [_ref_name(c.get("killer_ref")),
+			Fmt.weapon(c["name"]), c.get("recorded_in", []).size()]
+	if k.has("reconstructed"):
+		tip += "\nMissile path " + ("re-flown to the kill" if k["reconstructed"] else "could not be reproduced")
+	if k.has("evidence"):
+		tip += "\n\nHow sure (%d%%):" % roundi(k.get("confidence", 0.0) * 100.0)
+		for ev in k["evidence"]:
+			tip += "\n  " + ev
+	return tip
+
+# The line of an item in the lists: CONFIRMED / REJECTED (the scorer's review) or CHECK first,
+# "[note]" when the review has a note.
+func _item_text(id: String) -> String:
+	var it: Dictionary = _items[id]
+	var st := review.status(id)
+	var prefix := ""
+	if st == "confirmed":
+		prefix = "CONFIRMED  "
+	elif st == "rejected":
+		prefix = "REJECTED  "
+	elif it["check"]:
+		prefix = "CHECK  "
+	return prefix + it["line"] + ("  [note]" if review.note(id) != "" else "")
+
+func _item_color(id: String) -> Color:
+	var st := review.status(id)
+	if st == "confirmed":
+		return CONFIRMED_COLOR
+	if st == "rejected":
+		return REJECTED_COLOR
+	return CHECK_COLOR if _items[id]["check"] else _items[id]["color"]
+
+func _style(item: TreeItem, id: String) -> void:
+	item.set_text(0, _item_text(id))
+	item.set_custom_color(0, _item_color(id))
+
+# Whether an item passes the review filter (Kills and Deaths lists).
+func _passes(id: String) -> bool:
+	var st := review.status(id)
+	match show_filter.selected:
+		Show.TO_REVIEW:
+			return _items[id]["check"] and st == ""
+		Show.UNMARKED:
+			return st == ""
+		Show.CONFIRMED:
+			return st == "confirmed"
+		Show.REJECTED:
+			return st == "rejected"
+	return true
+
+# Whether a text passes the search box.
+func _matches(text: String) -> bool:
+	var want := search.text.strip_edges().to_lower()
+	return want == "" or text.to_lower().contains(want)
+
+func _refill() -> void:
+	_tree_items.clear()
+	_pilot_items.clear()
+	if _data.is_empty():
+		return
+	_fill_pilots()
+	_fill_kills()
+	_fill_deaths()
+	_fill_messages()
+	_update_summary()
+	ticks.queue_redraw()
+
+func _update_summary() -> void:
+	var kills_done := 0
+	var deaths_done := 0
+	var deaths_all := 0
+	var check_left := 0
+	for id in _items:
+		var it: Dictionary = _items[id]
+		var done := review.status(id) != ""
+		if it["kind"] == "kill":
+			kills_done += int(done)
+		elif it["kind"] == "death" and not it["quiet"]:
+			deaths_all += 1
+			deaths_done += int(done)
+		if it["check"] and it["kind"] != "claim" and not done:
+			check_left += 1
+	var text := "Reviewed: %d of %d kills, %d of %d losses  |  CHECK still to review: %d" % [
+		kills_done, _kill_order.size(), deaths_done, deaths_all, check_left]
+	if review.unmatched > 0:
+		text += "\n%d review mark(s) match nothing in this event (kept in %s)" % [review.unmatched,
+			review.path.get_file()]
+	if review.last_error != "":
+		text += "\nREVIEW FILE: " + review.last_error
+	review_label.text = text
+
+func _fill_pilots() -> void:
 	pilots.clear()
 	var root := pilots.create_item()
 	var kills_by = {}
 	var lost_by = {}
-	for k in data.get("kills", []):
+	for k in _data.get("kills", []):
 		var kr = k.get("killer_ref")
 		if kr != null and kr["kind"] == "aircraft":
 			var p = _entities.get(str(int(kr["id"])), {}).get("player", "?")
@@ -541,14 +848,18 @@ func _fill_pilots(data: Dictionary) -> void:
 		teams[team][e["player"]].append(e)
 		if e.get("fate", {}).get("kind", "") in DEATHS:
 			lost_by[e["player"]] = lost_by.get(e["player"], 0) + 1
+	var searching := search.text.strip_edges() != ""
+	var loadouts: Dictionary = _data.get("_loadouts", {})
 	for team in [1, 4, 0]:
 		if not teams.has(team):
+			continue
+		var names = teams[team].keys().filter(func(n): return _matches(n))
+		if names.is_empty():
 			continue
 		var t_item := pilots.create_item(root)
 		t_item.set_text(0, "%s  -  %d pilots" % [TEAM_NAMES[team], teams[team].size()])
 		t_item.set_custom_color(0, Main.iff_color(team).lightened(0.35))
 		t_item.set_selectable(0, false)
-		var names = teams[team].keys()
 		names.sort_custom(_players_first)      # people first, then the server's AI aircraft
 		for pname in names:
 			var sorties = teams[team][pname]
@@ -557,119 +868,108 @@ func _fill_pilots(data: Dictionary) -> void:
 			p_item.set_text(0, "%s   %d sorties, %d K, %d lost" % [pname, sorties.size(),
 				kills_by.get(pname, 0), lost_by.get(pname, 0)])
 			p_item.set_selectable(0, false)
-			p_item.collapsed = true
+			p_item.collapsed = not searching
 			for e in sorties:
 				var s_item := pilots.create_item(p_item)
-				var fate: Dictionary = e.get("fate", {})
-				s_item.set_text(0, "%s%s-%s  %s  %s" % ["CHECK  " if fate.get("check", false) else "",
-					Fmt.clock(e["telemetry"][0]["t"]), Fmt.clock(e["telemetry"][-1]["t"]),
-					Fmt.short_type(e["aircraft"]), fate_text(fate)])
-				if fate.get("check", false):
-					s_item.set_custom_color(0, CHECK_COLOR)
-				s_item.set_metadata(0, str(int(e["id"])) if e.has("id") else "")
-				var tip := fate_details(fate)
+				var eid := str(int(e["id"])) if e.has("id") else ""
+				s_item.set_metadata(0, eid)
+				_pilot_items[eid] = s_item
+				_style_sortie(s_item, e)
+				var tip := fate_details(e.get("fate", {}))
 				var src = e.get("source", {})
 				if not src.is_empty():
 					tip += "\nTrack from %s%s" % [src.get("file", "?"),
 						" (the pilot's own recording)" if src.get("own", false) else
 						" (seen from that game, %.2f s delay removed)" % src.get("delay", 0.0)]
+				for lo in loadouts.get(eid, []):
+					tip += "\nLoadout at %s: %s" % [Fmt.clock(lo["t"]), Fmt.loadout(lo["cfg"])]
 				s_item.set_tooltip_text(0, tip.strip_edges())
 
-func _fill_kills(data: Dictionary) -> void:
+# A sortie's line in the Pilots list, with its ending's review (or CHECK) in front.
+func _style_sortie(s_item: TreeItem, e: Dictionary) -> void:
+	var fate: Dictionary = e.get("fate", {})
+	var id := "d" + str(int(e.get("id", -1)))
+	var st := review.status(id) if _items.has(id) else ""
+	var prefix := "CONFIRMED  " if st == "confirmed" else ("REJECTED  " if st == "rejected" else
+		("CHECK  " if fate.get("check", false) else ""))
+	s_item.set_text(0, "%s%s-%s  %s  %s" % [prefix, Fmt.clock(e["telemetry"][0]["t"]),
+		Fmt.clock(e["telemetry"][-1]["t"]), Fmt.short_type(e["aircraft"]), fate_text(fate)])
+	if prefix != "":
+		s_item.set_custom_color(0, _item_color(id) if _items.has(id) else CHECK_COLOR)
+	else:
+		s_item.clear_custom_color(0)
+
+func _fill_kills() -> void:
 	kills_tree.clear()
 	var root := kills_tree.create_item()
-	for k in data.get("kills", []):
-		var item := kills_tree.create_item(root)
-		var text := "%s%s (%d s)  %s  %s ->  %s" % ["CHECK  " if k.get("check", false) else "",
-			Fmt.clock(k["t"]), int(k["t"]), _ref_name(k.get("killer_ref")), Fmt.weapon(k["name"]),
-			_ref_name(k.get("victim_ref"))]
-		if k.has("confidence"):
-			text += "  %d%%" % roundi(k["confidence"] * 100.0)
-		var notes := []
-		if k.get("other_claims", []).size() > 0:
-			notes.append("disputed")
-		if not k.get("verified", true):
-			notes.append("death not seen")
-		if notes.size() > 0:
-			text += "  (" + ", ".join(notes) + ")"
-		item.set_text(0, text)
-		item.set_custom_color(0, CHECK_COLOR if k.get("check", notes.size() > 0)
-			else Main.iff_color(_ref_iff(k.get("killer_ref"))).lightened(0.45))
-		item.set_metadata(0, k)
-		var tip := "Credit from %s; recorded in %d of %d games that were there" % [
-			k.get("basis", "the replay"), k.get("seen_by", 1), maxi(int(k.get("covered_by", 1)), 1)]
-		for c in k.get("other_claims", []):
-			tip += "\nAlso claimed: %s  %s  (%d games)" % [_ref_name(c.get("killer_ref")),
-				Fmt.weapon(c["name"]), c.get("recorded_in", []).size()]
-		if k.has("reconstructed"):
-			tip += "\nMissile path " + ("re-flown to the kill" if k["reconstructed"] else "could not be reproduced")
-		if k.has("evidence"):
-			tip += "\n\nHow sure (%d%%):" % roundi(k.get("confidence", 0.0) * 100.0)
-			for ev in k["evidence"]:
-				tip += "\n  " + ev
-		item.set_tooltip_text(0, tip)
-	var unconfirmed = data.get("unconfirmed_kills", [])
-	if unconfirmed.size() > 0:
+	for id in _kill_order:
+		var it: Dictionary = _items[id]
+		if not _passes(id) or not _matches(it["line"]):
+			continue
+		_list_item(kills_tree, root, id)
+	var claim_ids := []
+	for id in _items:
+		if _items[id]["kind"] == "claim" and _passes(id) and _matches(_items[id]["line"]):
+			claim_ids.append(id)
+	if not claim_ids.is_empty():
+		claim_ids.sort_custom(func(a, b): return _items[a]["t"] < _items[b]["t"])
 		var head := kills_tree.create_item(root)
-		head.set_text(0, "Unconfirmed credits (%d): the victim did not go down then" % unconfirmed.size())
+		head.set_text(0, "Unconfirmed credits (%d): the victim did not go down then" % claim_ids.size())
 		head.set_selectable(0, false)
-		head.collapsed = true
-		for k in unconfirmed:
-			var item := kills_tree.create_item(head)
-			item.set_text(0, "%s  %s  %s ->  %s" % [Fmt.clock(k["t"]), _ref_name(k.get("killer_ref")),
-				Fmt.weapon(k["name"]), _ref_name(k.get("victim_ref"))])
-			item.set_custom_color(0, Color(0.6, 0.6, 0.6))
-			item.set_metadata(0, k)
-			item.set_tooltip_text(0, "Recorded in %d game(s): %s" % [k.get("recorded_in", []).size(),
-				k.get("reason", "")])
+		head.collapsed = search.text.strip_edges() == ""
+		for id in claim_ids:
+			_list_item(kills_tree, head, id)
 
-# Every sortie's ending in time order: deaths and leaves first (CHECK = worth a scorer's look),
+# Every sortie's ending in time order: losses and leaves first (CHECK = worth a scorer's look),
 # then the harmless ones (left on the ground, still there at the end) folded away.
-func _fill_deaths(data: Dictionary) -> void:
+func _fill_deaths() -> void:
 	deaths_tree.clear()
 	var root := deaths_tree.create_item()
-	var ends := []
-	for id in _entities:
-		var fate: Dictionary = _entities[id].get("fate", {})
-		if not fate.is_empty() and fate.get("kind", "") != "none":
-			ends.append([float(fate.get("t", 0.0)), id])
-	ends.sort_custom(func(a, b): return a[0] < b[0])
+	var ids := []
+	for id in _items:
+		if _items[id]["kind"] == "death" and _passes(id) and _matches(_items[id]["line"]):
+			ids.append(id)
+	ids.sort_custom(func(a, b): return _items[a]["t"] < _items[b]["t"] or (_items[a]["t"] == _items[b]["t"] and a < b))
 	var quiet := []
-	for pair in ends:
-		if _entities[pair[1]]["fate"].get("kind", "") in ["end", "ground_exit"]:
-			quiet.append(pair)
+	for id in ids:
+		if _items[id]["quiet"]:
+			quiet.append(id)
 		else:
-			_death_item(root, pair)
+			_list_item(deaths_tree, root, id)
 	if not quiet.is_empty():
 		var group := deaths_tree.create_item(root)
 		group.set_text(0, "Left on the ground or still there at the end (%d)" % quiet.size())
 		group.set_selectable(0, false)
 		group.collapsed = true
-		for pair in quiet:
-			_death_item(group, pair)
+		for id in quiet:
+			_list_item(deaths_tree, group, id)
 
-func _death_item(parent: TreeItem, pair: Array) -> void:
-	var e = _entities[pair[1]]
-	var fate: Dictionary = e["fate"]
-	var item := deaths_tree.create_item(parent)
-	item.set_text(0, "%s%s (%d s)  %s (%s):  %s" % ["CHECK  " if fate.get("check", false) else "",
-		Fmt.clock(pair[0]), int(pair[0]), e["player"], Fmt.short_type(e["aircraft"]), fate_text(fate)])
-	item.set_custom_color(0, CHECK_COLOR if fate.get("check", false)
-		else Main.iff_color(int(e.get("iff", 0))).lightened(0.45))
-	item.set_metadata(0, [str(pair[1]), pair[0]])
-	item.set_tooltip_text(0, fate_details(fate))
+func _list_item(tree: Tree, parent: TreeItem, id: String) -> TreeItem:
+	var item := tree.create_item(parent)
+	item.set_metadata(0, id)
+	item.set_tooltip_text(0, _items[id]["details"])
+	_style(item, id)
+	_tree_items[id] = item
+	return item
 
-func _on_death_item() -> void:
-	var item := deaths_tree.get_selected()
-	var m = item.get_metadata(0)
-	if m != null:
-		_show_details(item.get_text(0), item.get_tooltip_text(0))
-		death_chosen.emit(m[0], m[1])
-
-func _show_details(title: String, text: String) -> void:
-	details.text = title + "\n\n" + text
-	details.visible = true
-	details.scroll_to_line(0)
+# The replays' text messages (server notices, chat) on the event clock; click one to go there.
+func _fill_messages() -> void:
+	messages_tree.clear()
+	var root := messages_tree.create_item()
+	var messages: Array = _data.get("events", [])
+	if messages.is_empty():
+		var none := messages_tree.create_item(root)
+		none.set_text(0, "No text messages in these replays.")
+		none.set_selectable(0, false)
+		return
+	for m in messages:
+		var text := str(m.get("text", ""))
+		if not _matches(text):
+			continue
+		var item := messages_tree.create_item(root)
+		item.set_text(0, "%s (%d s)  %s" % [Fmt.clock(m["t"]), int(m["t"]), text])
+		item.set_tooltip_text(0, text)
+		item.set_metadata(0, float(m["t"]))
 
 func _fill_files(data: Dictionary) -> void:
 	var text := ""
@@ -684,14 +984,141 @@ func _fill_files(data: Dictionary) -> void:
 		else:
 			text += "[color=#e08a7a]LEFT OUT[/color]  %s\n   recorded by %s: %s\n" % [
 				s["file"], s.get("recorded_by", "?"), s.get("reason", "")]
+	text += "\nReview marks are saved in:\n   %s" % review.path
 	files_text.text = text
 
 func _draw_ticks() -> void:
 	var w := ticks.size.x
+	var h := ticks.size.y
 	var span := _t_max - _t_min
 	for m in _kill_marks:
 		var x: float = (m[0] - _t_min) / span * w
-		ticks.draw_line(Vector2(x, 0), Vector2(x, ticks.size.y), m[1], 2.0)
+		ticks.draw_line(Vector2(x, 0), Vector2(x, h * 0.5), m[1], 2.0)
+	for id in _death_order:
+		var x: float = (_items[id]["t"] - _t_min) / span * w
+		var c: Color = CHECK_COLOR if _items[id]["check"] and review.status(id) == "" else _items[id]["color"]
+		ticks.draw_line(Vector2(x, h * 0.58), Vector2(x, h), c, 2.0)
+
+# Picks a kill, credit or ending: its story in the details box, its review under it, and the
+# replay goes there (node_3d.gd).
+func _pick(id: String) -> void:
+	_commit_note()
+	_selected = id
+	var it: Dictionary = _items[id]
+	_show_details(_item_text(id), it["details"])
+	_show_review()
+	if it["kind"] == "death":
+		death_chosen.emit(it["entity"], it["t"])
+	else:
+		kill_chosen.emit(it["k"])
+
+func _show_review() -> void:
+	review_box.visible = _selected != ""
+	if _selected == "":
+		return
+	var st := review.status(_selected)
+	confirm_button.set_pressed_no_signal(st == "confirmed")
+	reject_button.set_pressed_no_signal(st == "rejected")
+	review_state.text = {"confirmed": "confirmed", "rejected": "rejected"}.get(st, "not reviewed yet")
+	review_state.add_theme_color_override("font_color", _item_color(_selected) if st != "" else Color(0.75, 0.75, 0.75))
+	if note_edit.text != review.note(_selected):
+		note_edit.text = review.note(_selected)
+	_note_dirty = false
+
+func _toggle_status(st: String) -> void:
+	if _selected == "":
+		return
+	_save_mark("" if review.status(_selected) == st else st, note_edit.text)
+
+func _clear_mark() -> void:
+	if _selected == "":
+		return
+	note_edit.text = ""
+	_save_mark("", "")
+
+func _on_note_changed(_text: String) -> void:
+	_note_dirty = true
+	_note_clock = 0.0
+
+func _on_note_submitted(_text: String) -> void:
+	_commit_note()
+	note_edit.release_focus()
+
+func _commit_note() -> void:
+	if _note_dirty and _selected != "":
+		_save_mark(review.status(_selected), note_edit.text)
+	_note_dirty = false
+
+func _save_mark(st: String, note_text: String) -> void:
+	_note_dirty = false
+	review.set_mark(_selected, _items[_selected]["about"], st, note_text)
+	var item = _tree_items.get(_selected)
+	if item != null and is_instance_valid(item):
+		_style(item, _selected)
+	var s_item = _pilot_items.get(_items[_selected].get("entity", ""))
+	if s_item != null and is_instance_valid(s_item):
+		_style_sortie(s_item, _entities[_items[_selected]["entity"]])
+	details.text = _item_text(_selected) + "\n\n" + _items[_selected]["details"]
+	_show_review()
+	_update_summary()
+	ticks.queue_redraw()
+
+# To the next / previous of `ids` (by time): after the item picked last if the replay is still
+# around it (a jump starts it a few seconds early), else after now.
+func _jump(ids: Array, direction: int, what: String) -> void:
+	var ref := _now
+	var from_picked := false
+	if _items.has(_selected):
+		var ts: float = _items[_selected]["t"]
+		if _now >= ts - 12.0 and _now <= ts + 3.0:
+			ref = ts
+			from_picked = true
+	var pick := ""
+	var i := ids.find(_selected) if from_picked else -1
+	if i >= 0:
+		if i + direction >= 0 and i + direction < ids.size():
+			pick = ids[i + direction]
+	elif direction > 0:
+		for id in ids:
+			var t: float = _items[id]["t"]
+			if (t > ref) or (from_picked and t == ref and id != _selected):
+				pick = id
+				break
+	else:
+		for k in range(ids.size() - 1, -1, -1):
+			var t: float = _items[ids[k]]["t"]
+			if (t < ref) or (from_picked and t == ref and ids[k] != _selected):
+				pick = ids[k]
+				break
+	if pick == "":
+		_notice("No %s %s this point" % [what, "after" if direction > 0 else "before"])
+		return
+	_open(pick)
+
+# Shows an item in its list (switching to that tab, unfolding its group) and picks it.
+func _open(id: String) -> void:
+	var item = _tree_items.get(id)
+	if item != null and is_instance_valid(item):
+		var tree: Tree = item.get_tree()
+		tabs.current_tab = tabs.get_tab_idx_from_control(tree)
+		var p: TreeItem = item.get_parent()
+		while p != null:
+			p.collapsed = false
+			p = p.get_parent()
+		_selecting = true
+		item.select(0)
+		_selecting = false
+		tree.scroll_to_item(item)
+	_pick(id)
+
+func _notice(text: String) -> void:
+	notice.text = text
+	_notice_clock = 3.0
+
+func _show_details(title: String, text: String) -> void:
+	details.text = title + "\n\n" + text
+	details.visible = true
+	details.scroll_to_line(0)
 
 # --- input handlers ---
 
@@ -742,8 +1169,9 @@ func _on_build() -> void:
 # paths relative to the game files folder.
 func _scan_fields() -> void:
 	fields.clear()
-	var base := ProjectSettings.globalize_path("res://gamefiles")
-	_scan_dir(base, base)
+	var base := Paths.of("gamefiles")
+	if DirAccess.dir_exists_absolute(base):
+		_scan_dir(base, base)
 	menu_field.clear()
 	for f in fields:
 		menu_field.add_item("%s   (%s)" % [f[0], f[1].get_file()])
@@ -830,15 +1258,26 @@ func _on_pilot_item() -> void:
 	var item := pilots.get_selected()
 	var id = item.get_metadata(0)
 	if id != null and str(id) != "":
+		_commit_note()
+		_selected = ""
+		review_box.visible = false
 		_show_details(item.get_text(0), item.get_tooltip_text(0))
 		aircraft_chosen.emit(str(id))
 
-func _on_kill_item() -> void:
-	var item := kills_tree.get_selected()
-	var k = item.get_metadata(0)
-	if k != null:
-		_show_details(item.get_text(0), item.get_tooltip_text(0))
-		kill_chosen.emit(k)
+func _on_list_item(list: String) -> void:
+	if _selecting:
+		return
+	var item := (kills_tree if list == "Kills" else deaths_tree).get_selected()
+	if item == null:
+		return
+	var id = item.get_metadata(0)
+	if id != null and _items.has(str(id)):
+		_pick(str(id))
+
+func _on_message_item() -> void:
+	var item := messages_tree.get_selected()
+	if item != null and item.get_metadata(0) != null:
+		seek_requested.emit(maxf(float(item.get_metadata(0)) - 3.0, _t_min))
 
 # --- helpers ---
 

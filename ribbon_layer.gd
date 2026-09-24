@@ -15,7 +15,7 @@ extends Node3D
 const Main = preload("res://node_3d.gd")
 const STEP = 0.25            # seconds between ribbon points (the track has 20 per second)
 const GAP = 2.0              # a longer gap in the track breaks the ribbon
-const HALF_WIDTH = 4.0       # metres each side of the track at aircraft size 1
+const HALF_WIDTH = 4.0       # metres each side of the track at ribbon width 1
 const MS_TO_KT = 1.943844
 const SLOW_KT = 150.0        # red at or below
 const FAST_KT = 550.0        # green at or above (yellow halfway)
@@ -226,12 +226,13 @@ func update(t: float) -> void:
 	material.set_shader_parameter("now", t)
 	smoke_material.set_shader_parameter("now", t)
 
-# ribbons on/off, their length, the aircraft size (widths), smoke on/off
-func set_view(ribbons_on: bool, seconds: float, aircraft_scale: float, smoke_on: bool) -> void:
+# ribbons on/off, their length, their width (the View tab's ribbon width, 1 = true size; the
+# aircraft size setting does not widen them), smoke on/off
+func set_view(ribbons_on: bool, seconds: float, width: float, smoke_on: bool) -> void:
 	get_child(0).visible = ribbons_on
 	smoke_node.visible = smoke_on
 	material.set_shader_parameter("window", seconds)
-	material.set_shader_parameter("half_width", HALF_WIDTH * aircraft_scale)
+	material.set_shader_parameter("half_width", HALF_WIDTH * width)
 	material.set_shader_parameter("slow_kt", SLOW_KT)
 	material.set_shader_parameter("fast_kt", FAST_KT)
-	smoke_material.set_shader_parameter("half_width", SMOKE_HALF_WIDTH * aircraft_scale)
+	smoke_material.set_shader_parameter("half_width", SMOKE_HALF_WIDTH * width)

@@ -1,6 +1,6 @@
 extends Node3D
 # Weapons, explosions and kills, drawn at the replay time.
-# node_3d.gd calls setup(data) once, set_view(view) when the View settings change and
+# node_3d.gd calls setup(data, models) once, set_view(view) when the View settings change and
 # update(replay_time, aircraft) every frame (aircraft: id -> position of those in the air now).
 #
 #   missiles, flares, bombs, fuel tanks: follow the "path" that weapon_sim.py re-flew
@@ -10,11 +10,15 @@ extends Node3D
 #   and tanks' guns): straight line, speeding up by 50 m/s^2 to their top speed
 #   (all rules are FsWeapon::Move in YSFLIGHT-master/src/core/fsweapon.cpp)
 #
-# What is drawn: each weapon's trail in the shooter's team colour; a shape per weapon type
-# (missile, bomb, rocket, flare) scaled by the weapon-size setting; a tether from each guided
-# missile to its target (the one weapon_sim.py found it locked on, else the nearest enemy
-# aircraft) labelled with the distance in metres; and markers that stay where each weapon ended
-# (sphere: bright = hit, dark = missed/burnt out) and where each kill happened (cross).
+# What is drawn: each weapon as its own YSFlight model (the one the shooter's .dat names,
+# weapon_models.gd; a plain shape if there is none), tinted towards the shooter's team and
+# scaled by the weapon-size setting; flares as bright balls. Each weapon's trail is in the
+# shooter's team colour and its style tells the kind: air-to-air missiles a solid line from
+# launch, air-to-ground missiles a dashed one, bombs dots (grey dots: a dropped fuel tank),
+# rockets a short streak, gun rounds short tracers. A tether goes from each guided missile to its
+# target (the one weapon_sim.py found it locked on, else the nearest enemy aircraft), labelled
+# with the distance in metres. Markers stay for the View tab's "Markers stay" seconds where each
+# weapon ended (ball: bright = hit, dark = missed/burnt out) and where each kill happened (cross).
 # Lines are one mesh rebuilt per frame; shapes and markers are MultiMeshes (one draw call each).
 #
 # The kill feed and kill labels come from KILLCREDIT, i.e. what YSFlight decided. A missile kill
@@ -24,7 +28,8 @@ const Main = preload("res://node_3d.gd")
 const Fmt = preload("res://fmt.gd")
 const GRAVITY = 9.807
 const TRAIL_LINGER = 4.0     # seconds a missile's smoke trail stays after it ends
-const SPARK_TRAIL = 1.0      # seconds of trail behind flares and bombs
+const SPARK_TRAIL = 1.0      # seconds of trail behind flares
+const BOMB_TRAIL = 3.0       # seconds of dotted trail behind bombs and dropped fuel tanks
 const FEED_TIME = 20.0       # seconds a kill stays in the kill feed
 const FEED_LINES = 8
 const MARK_TIME = 8.0        # seconds a kill's name label stays where the kill happened
@@ -40,12 +45,17 @@ const TETHER_COLOR = Color(1.0, 0.9, 0.35)
 const TETHER_DASHES = 24     # a tether is dashed, so it can't be mistaken for a smoke trail
 const LOCK_RANGE = 30000.0   # nearest-enemy tethers only within this distance
 const MISSILES = ["AIM9", "AIM9X", "AIM120", "AGM65"]
-const BOMBS = ["BOMB500", "BOMB250", "BOMB500HD", "FUELTANK"]
+const AIR_TO_AIR = ["AIM9", "AIM9X", "AIM120"]
 const WEAPON_NAMES = {"AIM9": "AIM-9", "AIM9X": "AIM-9X", "AIM120": "AIM-120", "AGM65": "AGM-65",
 	"GUN": "GUN", "ROCKET": "ROCKET", "BOMB500": "BOMB", "BOMB250": "BOMB", "BOMB500HD": "BOMB",
 	"FUELTANK": "FUEL TANK"}
-enum Shape {MISSILE, BOMB, ROCKET, FLARE}
-const SHAPE_ROOM = [512, 128, 512, 256]   # most of each shape drawn at once
+const FUEL_TANK_COLOR = Color(0.62, 0.62, 0.62)
+const FLARE_COLOR = Color(1.0, 0.95, 0.7)
+const MODEL_TINT = 0.35      # how far a weapon model's own colours lean towards its team's colour
+const MODEL_ROOM = 256       # most of one weapon model drawn at once
+enum Shape {MISSILE, BOMB, ROCKET, FLARE}     # the plain shapes; weapon models come after them
+const SHAPE_ROOM = [512, 128, 512, 256]
+enum Trail {SOLID, DASHED, DOTTED}
 
 var entities = {}
 var grounds = []
@@ -64,6 +74,8 @@ var shot_v0 = PackedFloat64Array()
 var shot_vmax = PackedFloat64Array()
 var shot_kind = PackedByteArray()   # 0 gun, 1 rocket, 2 missile fired without a target
 var shot_color = PackedColorArray()
+var shot_shape = PackedInt32Array()
+var shot_shape_color = PackedColorArray()
 var shot_longest = 0.0
 
 var explosions = []
@@ -77,8 +89,8 @@ var kill_times = PackedFloat64Array()
 var lines: ArrayMesh
 var line_material: StandardMaterial3D
 var fireballs: MultiMesh
-var shapes = []              # MultiMesh per Shape
-var shape_used = [0, 0, 0, 0]
+var shapes = []              # MultiMesh per shape: the plain ones (Shape), then one per weapon model
+var shape_used = PackedInt32Array()
 var ends: MultiMesh
 var crosses: MultiMesh
 var tether_labels = []
@@ -90,21 +102,43 @@ var weapon_scale := 1.0
 var text_scale := 1.0
 var show_tethers := true
 var show_markers := true
+var marker_seconds := 30.0
+var _end_shown := Vector2i(-1, -1)    # markers now in the MultiMeshes: [first, last + 1)
+var _kill_shown := Vector2i(-1, -1)
 var _label_ms := 0           # when the tether distances were last written
 
-func setup(data):
+# models: {"meshes": {model path: Mesh}, "paths": {index in data["weapons"]: model path}}
+# (weapon_models.gd picks them; node_3d.gd reads them on its loader thread)
+func setup(data, models := {}):
 	entities = data["entities"]
 	grounds = data["ground_objects"]
 	var w3 = data.get("wind", [0, 0, 0])
 	wind = Main.ys_vec(w3[0], w3[1], w3[2])
 	_build_nodes()
 
+	var meshes: Dictionary = models.get("meshes", {})
+	var model_paths: Dictionary = models.get("paths", {})
 	var shots = []
-	for w in data["weapons"]:
+	var uses := {}                         # model path -> how many weapons use it
+	var weapons: Array = data["weapons"]
+	for i in weapons.size():
+		var w = weapons[i]
+		w["_model"] = model_paths.get(i, "")
+		if meshes.get(w["_model"]) == null:
+			w["_model"] = ""
 		if w.has("path"):
 			path_weapons.append(w)
 		elif w["name"] == "GUN" or w["name"] == "ROCKET" or w["name"] in MISSILES:
 			shots.append(w)
+		else:
+			continue
+		if w["_model"] != "":
+			uses[w["_model"]] = uses.get(w["_model"], 0) + 1
+	var slot := {}                         # model path -> its MultiMesh in shapes
+	for model_path in uses:
+		slot[model_path] = shapes.size()
+		shapes.append(_multimesh(meshes[model_path], null, mini(uses[model_path], MODEL_ROOM)))
+	shape_used.resize(shapes.size())
 	path_weapons.sort_custom(func(a, b): return a["t"] < b["t"])
 	shots.sort_custom(func(a, b): return a["t"] < b["t"])
 
@@ -117,9 +151,19 @@ func setup(data):
 		w["_ts"] = ts
 		w["_pts"] = pts
 		w["_missile"] = w["name"] in MISSILES
-		w["_shape"] = Shape.MISSILE if w["_missile"] else (Shape.FLARE if w["name"] == "FLARE" else Shape.BOMB)
 		w["_iff"] = _ref_iff(w.get("owner_ref"))
 		w["_color"] = _path_color(w)
+		w["_trail"] = Trail.SOLID if w["name"] in AIR_TO_AIR or w["name"] == "FLARE" else \
+			(Trail.DASHED if w["name"] == "AGM65" else Trail.DOTTED)
+		if w["_model"] != "":
+			w["_shape"] = slot[w["_model"]]
+			w["_shape_color"] = _model_color(w["_iff"])
+		elif w["name"] == "FLARE":
+			w["_shape"] = Shape.FLARE
+			w["_shape_color"] = w["_color"]
+		else:
+			w["_shape"] = Shape.MISSILE if w["_missile"] else Shape.BOMB
+			w["_shape_color"] = _team(w["_iff"])
 		path_t0.append(w["t"])
 		var shown = w["end"]["t"] - w["t"] + (TRAIL_LINGER if w["_missile"] else 0.0)
 		path_longest = max(path_longest, shown)
@@ -144,6 +188,12 @@ func setup(data):
 		shot_vmax.append(vmax)
 		shot_kind.append(kind)
 		shot_color.append(team.lightened(0.45) if kind == 0 else team.lightened(0.3))
+		if w["_model"] != "":
+			shot_shape.append(slot[w["_model"]])
+			shot_shape_color.append(_model_color(iff))
+		else:
+			shot_shape.append(Shape.ROCKET if kind == 1 else Shape.MISSILE)
+			shot_shape_color.append(team.lightened(0.1))
 		shot_longest = max(shot_longest, flight)
 		if kind > 0:
 			var d = -Main.ys_basis(w).z
@@ -193,7 +243,6 @@ func setup(data):
 		kill_times.append(m[0])
 	ends.instance_count = end_marks.size()
 	crosses.instance_count = kill_marks.size()
-	_place_markers()
 
 # Where the live kill feed goes: right-aligned, keeping `right` pixels free on the right
 # (for the side panel) and starting `top` pixels down (below the top bar).
@@ -203,13 +252,16 @@ func set_feed_box(right: float, top: float) -> void:
 	feed.offset_top = top
 
 func set_view(view: Dictionary) -> void:
-	var rescale: bool = view["weapon_scale"] != weapon_scale
+	var redo: bool = view["weapon_scale"] != weapon_scale or view["marker_seconds"] != marker_seconds \
+		or view["markers"] != show_markers
 	weapon_scale = view["weapon_scale"]
 	text_scale = view["text_scale"]
 	show_tethers = view["tethers"]
 	show_markers = view["markers"]
-	if rescale:
-		_place_markers()
+	marker_seconds = view["marker_seconds"]
+	if redo:
+		_end_shown = Vector2i(-1, -1)
+		_kill_shown = Vector2i(-1, -1)
 	for k in kills:
 		k["mark"].pixel_size = KILL_PIXEL * text_scale
 	for l in tether_labels:
@@ -218,7 +270,7 @@ func set_view(view: Dictionary) -> void:
 func update(t: float, aircraft: Dictionary) -> void:
 	var pts = PackedVector3Array()
 	var cols = PackedColorArray()
-	shape_used = [0, 0, 0, 0]
+	shape_used.fill(0)
 	var tethers = []
 	_add_path_weapons(t, pts, cols, tethers, aircraft)
 	_add_shots(t, pts, cols)
@@ -233,11 +285,10 @@ func update(t: float, aircraft: Dictionary) -> void:
 		arrays[Mesh.ARRAY_COLOR] = cols
 		lines.add_surface_from_arrays(Mesh.PRIMITIVE_LINES, arrays)
 		lines.surface_set_material(0, line_material)
-	for s in Shape.size():
+	for s in shapes.size():
 		shapes[s].visible_instance_count = shape_used[s]
-	# markers are sorted by time: showing those up to now is one binary search
-	ends.visible_instance_count = end_times.bsearch(t, false) if show_markers else 0
-	crosses.visible_instance_count = kill_times.bsearch(t, false) if show_markers else 0
+	_end_shown = _show_marks(ends, end_marks, end_times, t, END_RADIUS, _end_shown)
+	_kill_shown = _show_marks(crosses, kill_marks, kill_times, t, KILL_ARM, _kill_shown)
 	_update_fireballs(t)
 	_update_kills(t)
 
@@ -254,21 +305,33 @@ func _add_path_weapons(t, pts, cols, tethers, aircraft):
 		var ts: PackedFloat64Array = w["_ts"]
 		var wp: PackedVector3Array = w["_pts"]
 		var col: Color = w["_color"]
-		# trail: missiles from launch, flares and bombs only the last second
-		var from_t = w["t"] if w["_missile"] else t - SPARK_TRAIL
+		var style: int = w["_trail"]
+		# trail: missiles from launch, bombs and fuel tanks the last few seconds, flares the last one
+		var from_t = w["t"] if w["_missile"] else t - (SPARK_TRAIL if w["name"] == "FLARE" else BOMB_TRAIL)
 		var k0 = max(ts.bsearch(from_t) - 1, 0)
 		var k1 = ts.bsearch(t, false) - 1          # last point at or before t
 		for k in range(k0, min(k1, wp.size() - 1)):
-			_seg(pts, cols, wp[k], wp[k + 1], col)
+			_trail_seg(pts, cols, wp[k], wp[k + 1], k, style, col)
 		if t <= end_t and k1 >= 0 and k1 < wp.size() - 1:
 			var a = (t - ts[k1]) / max(ts[k1 + 1] - ts[k1], 0.001)
 			var head = wp[k1].lerp(wp[k1 + 1], a)
-			_seg(pts, cols, wp[k1], head, col)
-			_shape(w["_shape"], head, wp[k1 + 1] - wp[k1], _team(w["_iff"]) if w["_shape"] != Shape.FLARE else col)
+			_trail_seg(pts, cols, wp[k1], head, k1, style, col)
+			_shape(w["_shape"], head, wp[k1 + 1] - wp[k1], w["_shape_color"])
 			if w["_missile"] and show_tethers:
 				var target = _target_position(w, t, head, aircraft)
 				if target != null:
 					tethers.append([head, target, i - 1])
+
+# One piece of a trail, between path points k and k + 1, in the weapon's style: solid, dashed
+# (two pieces on, one off) or dotted (the first third of each piece).
+func _trail_seg(pts, cols, a: Vector3, b: Vector3, k: int, style: int, c: Color) -> void:
+	if style == Trail.DASHED:
+		if k % 3 != 2:
+			_seg(pts, cols, a, b, c)
+	elif style == Trail.DOTTED:
+		_seg(pts, cols, a, a.lerp(b, 0.3), c)
+	else:
+		_seg(pts, cols, a, b, c)
 
 func _add_shots(t, pts, cols):
 	var i = shot_t0.bsearch(t - shot_longest)
@@ -287,7 +350,7 @@ func _add_shots(t, pts, cols):
 			if p.y > 0.0:
 				_seg(pts, cols, p - back, p, shot_color[i])
 				if shot_kind[i] > 0:
-					_shape(Shape.ROCKET if shot_kind[i] == 1 else Shape.MISSILE, p, d, shot_color[i].darkened(0.2))
+					_shape(shot_shape[i], p, d, shot_shape_color[i])
 		i += 1
 
 # Tether lines, with the distance written at the middle of each (text refreshed 10 times a
@@ -349,15 +412,22 @@ func _shape(kind: int, pos: Vector3, dir: Vector3, color: Color) -> void:
 	mm.set_instance_color(n, color)
 	shape_used[kind] = n + 1
 
-func _place_markers() -> void:
-	var r := END_RADIUS * weapon_scale
-	for n in end_marks.size():
-		ends.set_instance_transform(n, Transform3D(Basis.from_scale(Vector3(r, r, r)), end_marks[n][1]))
-		ends.set_instance_color(n, end_marks[n][2])
-	var s := KILL_ARM * weapon_scale
-	for n in kill_marks.size():
-		crosses.set_instance_transform(n, Transform3D(Basis.from_scale(Vector3(s, s, s)), kill_marks[n][1]))
-		crosses.set_instance_color(n, kill_marks[n][2])
+# Shows the markers of the last marker_seconds (marks and times sorted by time); the MultiMesh is
+# only rewritten when that set changes. Returns the set now shown, [first, last + 1).
+func _show_marks(mm: MultiMesh, marks: Array, times: PackedFloat64Array, t: float, size: float,
+		shown: Vector2i) -> Vector2i:
+	var now := Vector2i(times.bsearch(t - marker_seconds), times.bsearch(t, false)) if show_markers \
+		else Vector2i.ZERO
+	if now == shown:
+		return shown
+	var s := size * weapon_scale
+	var n := 0
+	for k in range(now.x, now.y):
+		mm.set_instance_transform(n, Transform3D(Basis.from_scale(Vector3(s, s, s)), marks[k][1]))
+		mm.set_instance_color(n, marks[k][2])
+		n += 1
+	mm.visible_instance_count = n
+	return now
 
 func _update_fireballs(t):
 	var n = 0
@@ -422,7 +492,8 @@ func _build_nodes():
 	fire_node.material_override = fire_material
 	add_child(fire_node)
 
-	# weapon shapes, long axis along -Z (the weapon's nose), true size at weapon size 1
+	# plain weapon shapes (for weapons without a model), long axis along -Z (the weapon's nose),
+	# true size at weapon size 1
 	var lit := _instance_material(false)
 	var to_nose := Transform3D(Basis(Vector3.RIGHT, -PI / 2.0), Vector3.ZERO)   # +Y -> -Z
 	var missile := CylinderMesh.new()
@@ -487,6 +558,7 @@ func _build_nodes():
 	feed.add_theme_color_override("font_outline_color", Color(0, 0, 0))
 	canvas.add_child(feed)
 
+# mat null: the mesh's own materials (weapon models)
 func _multimesh(mesh: Mesh, mat: Material, count: int) -> MultiMesh:
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -496,7 +568,8 @@ func _multimesh(mesh: Mesh, mat: Material, count: int) -> MultiMesh:
 	mm.visible_instance_count = 0
 	var node := MultiMeshInstance3D.new()
 	node.multimesh = mm
-	node.material_override = mat
+	if mat != null:
+		node.material_override = mat
 	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(node)
 	return mm
@@ -533,8 +606,14 @@ func _tether_label() -> Label3D:
 
 func _path_color(w) -> Color:
 	if w["name"] == "FLARE":
-		return Color(1.0, 0.95, 0.7)
+		return FLARE_COLOR
+	if w["name"] == "FUELTANK":
+		return FUEL_TANK_COLOR
 	return _team(w["_iff"]).lightened(0.3)
+
+# A weapon model's own colours, leaning towards the shooter's team colour.
+static func _model_color(iff) -> Color:
+	return Color.WHITE.lerp(_team(iff), MODEL_TINT)
 
 # Team colours from the IFF (Blue 1, Red 4); anything else (pirates, unknown) grey.
 static func _team(iff) -> Color:

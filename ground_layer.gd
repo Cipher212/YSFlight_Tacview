@@ -8,7 +8,8 @@ extends Node3D
 # team's colour.
 
 const Main = preload("res://node_3d.gd")
-const PACKS = ["res://gamefiles", "res://YSFLIGHT-master/runtime/ground"]
+const Paths = preload("res://paths.gd")
+const PACKS = ["gamefiles", "YSFLIGHT-master/runtime/ground"]
 const NEUTRAL = Color(0.62, 0.6, 0.52)
 const DEAD = Color(0.12, 0.12, 0.12)
 const DEAD_TINT = Color(0.3, 0.3, 0.3)         # multiplies a model's own colours
@@ -25,7 +26,7 @@ static func index_models() -> Dictionary:
 	var re := RegEx.new()
 	re.compile("\"[^\"]*\"|\\S+")
 	for pack in PACKS:
-		var base := ProjectSettings.globalize_path(pack)
+		var base := Paths.of(pack)
 		if DirAccess.dir_exists_absolute(base):
 			_scan(base, [base, base.get_base_dir()], re, out)
 	return out
@@ -66,7 +67,7 @@ static func model_path(g: Dictionary, index: Dictionary) -> String:
 	if typeof(dat) != TYPE_DICTIONARY:
 		return ""
 	for pack in PACKS:
-		var p := ProjectSettings.globalize_path(pack).path_join(str(dat.get("file", "")).replace("\\", "/"))
+		var p := Paths.of(pack).path_join(str(dat.get("file", "")).replace("\\", "/"))
 		if FileAccess.file_exists(p):
 			return index.get(_key(p), "")
 	return ""

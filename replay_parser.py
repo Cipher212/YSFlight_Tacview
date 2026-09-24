@@ -1,7 +1,8 @@
 """Turns one or more YSFlight replays (.yfs) of the same event into an event file for the viewer.
 
     python replay_parser.py [options] replay1.yfs [replay2.yfs ...]
-        -o, --out FILE   event file to write (default: parsed_telemetry.json)
+        -o, --out FILE   event file to write (default: parsed_telemetry.json); a name ending in
+                         .gz is written gzip-compressed (several times smaller; the viewer reads both)
         --fld FILE       the map's .fld (default: the replay's field, found in the scenery lists)
         --map NAME       map name to show (default: the replay's field)
         --pack DIR       game files with the ground .dat files (default: gamefiles next to this)
@@ -13,6 +14,7 @@ timeline (event_merge.py); guided weapons are re-flown with YSFlight's missile c
 import argparse
 import bisect
 import collections
+import gzip
 import json
 import math
 import multiprocessing
@@ -22,6 +24,10 @@ import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
 
+# The Python bundled with the .exe (Windows "embeddable" Python) doesn't look for modules next to
+# the script it runs, so the pipeline's own modules are found from here.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import event_merge
 import fates
 import fld_reader
@@ -30,6 +36,7 @@ import weapon_sim
 import yfs_reader
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+GZIP_LEVEL = 5      # event files written .gz: much faster than the default 9, nearly as small
 
 
 def progress(percent, text):
@@ -230,7 +237,11 @@ def build_event(paths, out_path, map_name, pack_dirs, fld_path=None):
     fates.analyse(match_data, aircraft_list, views, own_file, cover, ground_height, resolve)
 
     progress(90, "writing the event file")
-    with open(out_path, "w") as out_f:
+    if out_path.lower().endswith(".gz"):
+        out_f = gzip.open(out_path, "wt", encoding="utf-8", compresslevel=GZIP_LEVEL)
+    else:
+        out_f = open(out_path, "w", encoding="utf-8")
+    with out_f:
         json.dump(match_data, out_f, separators=(",", ":"))
 
     missile_kills = [k for k in kills if "reconstructed" in k]
