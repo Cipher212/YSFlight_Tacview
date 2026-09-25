@@ -360,3 +360,38 @@ def simulate_all(match_data, aircraft_list, ground_list, ground=sea_level):
         w["end"] = result["end"]
         done += 1
     return done
+
+
+def refly_as_seen(match_data, aircraft_list, seen, ground=sea_level):
+    """Deeper missile check. An air-to-air missile that missed its target in the re-flight above
+    is flown again against the target as the shooter's own game showed it: that game's copy of
+    the target, which runs `delay` seconds behind the target's own game (its flares too). The
+    game flew the missile in that world, so a hit there is what the shooter's game saw.
+    seen: {weapon index: (target Track as the shooter's replay recorded it, replay file name,
+    delay)}. Adds w["as_seen"] = {"reason", "t", "file", "delay", and on a hit "aircraft_index",
+    "miss_distance", "path"} to each; returns how many hit their target there."""
+    wind = tuple(match_data.get("wind", (0.0, 0.0, 0.0)))
+    aircraft_tracks = {a["index"]: Track(a["telemetry"]) for a in aircraft_list if a.get("telemetry")}
+    iffs = {a["index"]: a.get("iff") for a in aircraft_list}
+    flares = sorted((dict(w) for w in match_data["weapons"] if w["type"] == 5), key=lambda f: f["t"])
+    for f in flares:
+        f["_pts"] = flare_points(f)
+    hits = 0
+    for n, (track, file_name, delay) in seen.items():
+        w = match_data["weapons"][n]
+        target = w["target"]
+        tracks = dict(aircraft_tracks)
+        tracks[target] = track
+        own = "A%d" % target
+        near = [dict(f, t=f["t"] + delay) if f["owner"] == own else f for f in flares
+                if w["t"] - 30.0 <= f["t"] <= w["t"] + 120.0]
+        near.sort(key=lambda f: f["t"])
+        owner = w["owner"]
+        rec = dict(w, owner=int(owner[1:]) if owner.startswith("A") else None)
+        result = simulate(rec, tracks, {}, near, wind, iffs, ground)
+        end = dict(result["end"], file=file_name, delay=round(delay, 3))
+        if end["reason"] == "hit" and end.get("aircraft_index") == target:
+            end["path"] = result["path"]         # (kept only for the hits: event files stay small)
+            hits += 1
+        w["as_seen"] = end
+    return hits

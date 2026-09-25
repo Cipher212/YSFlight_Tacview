@@ -20,7 +20,9 @@ bigger (a missile, a bomb, the ground, another aircraft).
 A leave is any exit in flight (game crash, network, or the exit key); one while a missile was
 chasing the aircraft, rounds were landing or an enemy was close is "under fire", with the
 threats listed, since scorers may credit that as a kill. Aircraft removed with several others at
-the same moment at the end are the event closing, not deaths."""
+the same moment at the end are the event closing, not deaths.
+Also per sortie: a damage log (every health drop and what was near it then) and, for crashes,
+the nearest aircraft and ground object at that moment (for judging a kamikaze). Evidence only."""
 import bisect
 import collections
 import math
@@ -37,6 +39,8 @@ GUN_REACH = 2500.0     # m: rounds fired from further away are not checked
 NEAR_ENEMY = 5000.0    # m: an enemy aircraft this close when someone leaves counts as a threat
 DAMAGE_WINDOW = 30.0   # s of health history looked at before an aircraft went down
 KILL_WINDOW = 12.0     # s between a kill credit and the death it explains
+DAMAGE_JOIN = 1.0      # s: health drops this close together (of one kind) are one damage log line
+COLLIDE_NEAR = 30.0    # m: another aircraft this close when health dropped is worth a mention
 MASS_REMOVAL = 4       # this many aircraft gone within 2 s near the end = the event closing
 MS_TO_KT = 1.943844
 
@@ -44,6 +48,7 @@ MS_TO_KT = 1.943844
 P_CREDIT, P_CREDIT_EXTRA, P_CREDIT_VICTIM, P_CREDIT_SHOOTER = 6, 2, 3, 2
 P_THIN_CREDIT = 3                    # to "unclear": only one of several replays credited the kill
 P_MISSILE_HIT, P_MISSILE_NEAR, P_UNCONFIRMED = 5, 2, 3
+P_MISSILE_HIT_SEEN = 4               # hit it as the shooter's game showed it (weapon_sim.refly_as_seen)
 P_BOOM_BY, P_DAMAGE_AT_HIT, P_DIED, P_BIG_HIT = 2, 3, 1, 2
 P_HIT_UNKNOWN = 3                    # health lost at low G, no shooter found
 P_COLLIDE_BOTH = ((15.0, 10), (30.0, 6))
@@ -65,6 +70,7 @@ def analyse(md, aircraft_list, views, own_file, cover, ground_height, resolve):
     ctx = _Context(md, aircraft_list, cover, ground_height, resolve)
     for n, e in enumerate(aircraft_list):
         e["fate"] = _ending(ctx, n, e, views[n], own_file.get("A%d" % n))
+        e["damage"] = damage_log(ctx, n, e)
     for k in md["kills"]:
         _kill_evidence(ctx, k, aircraft_list)
 
@@ -84,6 +90,12 @@ class _Context:
             self.unconfirmed[u["victim"]].append(u)
         self.guns = sorted((w for w in md["weapons"] if w["name"] == "GUN"), key=lambda w: w["t"])
         self.gun_t = [w["t"] for w in self.guns]
+        self.rockets = sorted((w for w in md["weapons"] if w["name"] == "ROCKET"), key=lambda w: w["t"])
+        self.rocket_t = [w["t"] for w in self.rockets]
+        self.flying = [w for w in md["weapons"] if w["name"] not in ("GUN", "ROCKET", "FLARE")
+                       and (w.get("path") or w.get("end"))]
+        self.flying.sort(key=lambda w: w["t"])
+        self.flying_t = [w["t"] for w in self.flying]
         self.missiles_at = collections.defaultdict(list)      # aircraft index -> guided weapons aimed at it
         for w in md["weapons"]:
             if w.get("path") and w.get("target", -1) >= 0 and w["type"] in weapon_sim.AIR_TO_AIR:
@@ -91,6 +103,11 @@ class _Context:
         self.booms = sorted(md["explosions"], key=lambda x: x["t"])
         self.boom_t = [x["t"] for x in self.booms]
         self.ground_objects = md["ground_objects"]
+        self.ground_number = []                  # each object's number among those of its type
+        seen = collections.Counter()
+        for g in self.ground_objects:
+            seen[g["type"]] += 1
+            self.ground_number.append(seen[g["type"]])
 
     def name(self, label):
         if label and label.startswith("A") and label[1:].isdigit():
@@ -98,7 +115,7 @@ class _Context:
             return "%s (%s)" % (e["player"], e["aircraft"].split("(")[0])
         if label and label.startswith("G") and label[1:].isdigit():
             g = self.ground_objects[int(label[1:])]
-            return "%s #%d" % (g["name"] or g["type"], int(label[1:]))
+            return "%s #%d" % (g["name"] or g["type"], self.ground_number[int(label[1:])])
         return "someone the replays don't name"
 
 
@@ -232,6 +249,15 @@ def _ending(ctx, n, e, members, own):
                 % (_weapon(w["name"]), ctx.name(w["owner"]), _clock(end["t"]), end.get("miss_distance", 0.0)),
                 w["owner"], w["name"])
             continue
+        seen = w.get("as_seen") or {}
+        if seen.get("reason") == "hit" and seen.get("aircraft_index") == n \
+                and abs(seen["t"] - t_ref) <= 3.0 + seen.get("delay", 0.0):
+            add(("weapon", w["owner"], w["name"]), "weapon", P_MISSILE_HIT_SEEN,
+                "Re-flown %s from %s hit it at %s as the shooter's game showed it (%s, which saw it %.2f s "
+                "late; it missed in the re-flight against its own track)."
+                % (_weapon(w["name"]), ctx.name(w["owner"]), _clock(seen["t"]), seen.get("file", "?"),
+                   seen.get("delay", 0.0)), w["owner"], w["name"])
+            continue
         close = _missile_pass(w, tr, t_ref - 3.0, t_ref + 1.0)
         if close is not None and close[0] <= MISSILE_NEAR:
             add(("weapon", w["owner"], w["name"]), "weapon", P_MISSILE_NEAR,
@@ -347,6 +373,8 @@ def _ending(ctx, n, e, members, own):
     fate["check"] = top["p"] < LIKELY or (credited and fate["kind"] != "killed") or fate["kind"] == "left_under_fire"
     if fate["kind"] in ("killed", "shot_down"):
         fate["by"], fate["weapon"] = top["by"], top["weapon"]
+    if fate["kind"] in ("crashed", "collision", "unknown"):
+        evidence.extend(_crash_neighbours(ctx, n, t_ref))
     return fate
 
 
@@ -389,15 +417,17 @@ def _missile_pass(w, tr, t0, t1):
     return best
 
 
-def _gun_passes(ctx, n, label, t_end, reach=GUN_NEAR, window=4.0):
+def _gun_passes(ctx, n, label, t_end, reach=GUN_NEAR, window=4.0, rockets=False):
     """{shooter: [(time, distance)]} of gun rounds (from others) passing within `reach` of
     aircraft n in the `window` seconds before t_end: each round flies straight on from where it
     was fired, dropping under gravity, while the aircraft follows its track. Only rounds fired
-    within GUN_REACH and within about 20 degrees of the aircraft are followed."""
+    within GUN_REACH and within about 20 degrees of the aircraft are followed. rockets: the same
+    for rockets (straight, speeding up to their top speed as the viewer draws them)."""
     tr = ctx.tracks[n]
     out = collections.defaultdict(list)
-    i0 = bisect.bisect_left(ctx.gun_t, t_end - window)
-    for w in ctx.guns[i0:bisect.bisect_right(ctx.gun_t, t_end + 0.2)]:
+    shots, times = (ctx.rockets, ctx.rocket_t) if rockets else (ctx.guns, ctx.gun_t)
+    i0 = bisect.bisect_left(times, t_end - window)
+    for w in shots[i0:bisect.bisect_right(times, t_end + 0.2)]:
         if w["owner"] == label or w["owner"] == "N" or not (tr.start <= w["t"] <= tr.end):
             continue
         p0 = (w["x"], w["y"], w["z"])
@@ -409,13 +439,18 @@ def _gun_passes(ctx, n, label, t_end, reach=GUN_NEAR, window=4.0):
         if sum(fwd[c] * (target[c] - p0[c]) for c in range(3)) < 0.94 * dist:
             continue                                # not pointed at it
         v = max(float(w.get("velocity", 0.0)), 1.0)
-        tof = min(float(w.get("range", 2000.0)) / v, 3.0, t_end + 0.5 - w["t"])
+        vmax = max(float(w.get("max_speed", v)), v)
+        tof = min(float(w.get("range", 2000.0)) / (0.5 * (v + vmax)), 6.0 if rockets else 3.0, t_end + 0.5 - w["t"])
         steps = max(int(tof / 0.1), 1)
         best = None
         prev_r, prev_q = p0, target
         for s in range(1, steps + 1):
             tau = tof * s / steps
-            r = (p0[0] + fwd[0] * v * tau, p0[1] + fwd[1] * v * tau - 4.9035 * tau * tau, p0[2] + fwd[2] * v * tau)
+            if rockets:
+                a = _rocket_dist(v, vmax, tau)
+                r = (p0[0] + fwd[0] * a, p0[1] + fwd[1] * a, p0[2] + fwd[2] * a)
+            else:
+                r = (p0[0] + fwd[0] * v * tau, p0[1] + fwd[1] * v * tau - 4.9035 * tau * tau, p0[2] + fwd[2] * v * tau)
             q = tr.at(w["t"] + tau)
             d, _ = weapon_sim._closest(prev_r, r, prev_q, q)
             if best is None or d < best[1]:
@@ -471,6 +506,7 @@ def _kill_evidence(ctx, k, aircraft_list):
             + fate.get("evidence", [])
         k["check"] = bool(fate.get("check")) or k["confidence"] < LIKELY
         return
+    g = ctx.ground_objects[int(v[1:])] if v.startswith("G") and v[1:].isdigit() else {}
     p = 0.5 + (0.25 if k.get("reconstructed") else 0.0) + (0.15 if k.get("seen_by", 1) >= 2 else 0.0) \
         + (0.05 if k.get("verified") else 0.0)
     k["confidence"] = round(min(p, 0.95), 2)
@@ -478,6 +514,176 @@ def _kill_evidence(ctx, k, aircraft_list):
                      % (k.get("seen_by", 1), max(k.get("covered_by", 1), 1))]
     if k.get("reconstructed") is not None:
         k["evidence"].append("Re-flown missile %s." % ("hit it" if k["reconstructed"] else "did not reach it"))
-    if k.get("verified"):
-        k["evidence"].append("The object is shown destroyed then.")
-    k["check"] = k["confidence"] < LIKELY
+    k["evidence"] += g.get("destroyed_evidence", [])     # when the replays agree it was destroyed
+    k["check"] = k["confidence"] < LIKELY or bool(g.get("destroyed_check"))
+
+
+def _rocket_dist(v0, vmax, tau):
+    """How far a rocket has flown tau seconds after launch (50 m/s^2 up to its top speed; as the
+    viewer draws it, combat_layer.gd)."""
+    if v0 >= vmax:
+        return v0 * tau
+    t_acc = (vmax - v0) / 50.0
+    if tau <= t_acc:
+        return v0 * tau + 25.0 * tau * tau
+    return v0 * t_acc + 25.0 * t_acc * t_acc + vmax * (tau - t_acc)
+
+
+def damage_log(ctx, n, e):
+    """Every time aircraft n lost health, with what was near it then: re-flown weapons that hit it
+    or passed close (also as the shooter's game showed it), explosions, gun rounds and rockets
+    passing close, over-G, another aircraft close. Evidence for the scorers, not a verdict.
+    Drops less than DAMAGE_JOIN apart, of one kind (over-G or not), make one entry:
+    {"t", "t_end", "from", "to", "down" (it went down then), "g", "text"}."""
+    tel = e["telemetry"]
+    tr = ctx.tracks.get(n)
+    if not tel or tr is None:
+        return []
+    final = len(tel)                                # the dead stretch the track ends in
+    while final > 0 and tel[final - 1]["ctrl"][0] in (3, 4, 5):
+        final -= 1
+    groups = []
+    for k in range(1, len(tel)):
+        if k - 1 >= final:
+            break                                   # already going down (health is then set to 1)
+        lost = tel[k - 1]["ctrl"][9] - tel[k]["ctrl"][9]
+        if lost <= 0:
+            continue
+        t = tel[k]["t"]
+        j = bisect.bisect_left(tr.t, t - 0.5)
+        g = max(abs(f.get("g", 0.0)) for f in tel[j:k + 1])
+        down = k >= final and tel[k]["ctrl"][0] in (4, 5)   # (a tumble it flew on from is no death)
+        last = groups[-1] if groups else None
+        if last and not down and not last["down"] and t - last["t1"] <= DAMAGE_JOIN and (g >= OVER_G) == last["overg"]:
+            last.update(t1=t, to=tel[k]["ctrl"][9], g=max(last["g"], g))
+        else:
+            groups.append({"t0": t, "t1": t, "from": tel[k - 1]["ctrl"][9], "to": tel[k]["ctrl"][9],
+                           "g": g, "overg": g >= OVER_G, "down": down})
+    out = []
+    for grp in groups:
+        why = _damage_sources(ctx, n, grp)
+        what = "Health %d, went down" % grp["from"] if grp["down"] else "Health %d -> %d" % (grp["from"], grp["to"])
+        if grp["t1"] - grp["t0"] >= 0.3:
+            what += " over %.1f s" % (grp["t1"] - grp["t0"])
+        out.append({"t": round(grp["t0"], 3), "t_end": round(grp["t1"], 3), "from": grp["from"], "to": grp["to"],
+                    "down": grp["down"], "g": round(grp["g"], 1),
+                    "text": "%s (%d s)  %s: %s" % (_clock(grp["t0"]), int(grp["t0"]), what, "; ".join(why))})
+    return out
+
+
+def _damage_sources(ctx, n, grp):
+    """Sentences on what was near aircraft n when it lost health (grp from damage_log), the
+    likeliest first; at most four."""
+    tr = ctx.tracks[n]
+    label = "A%d" % n
+    t0, t1 = grp["t0"], grp["t1"]
+    found = []                                     # (rank, sentence): lower first
+    lo = bisect.bisect_left(ctx.flying_t, t0 - 130.0)
+    for w in ctx.flying[lo:bisect.bisect_right(ctx.flying_t, t1 + 0.5)]:
+        if w["owner"] == label:
+            continue
+        end = w.get("end") or {}
+        seen = w.get("as_seen") or {}
+        what = "%s from %s" % (_weapon(w["name"]), ctx.name(w["owner"]))
+        if end.get("reason") == "hit" and end.get("aircraft_index") == n and t0 - 2.0 <= end["t"] <= t1 + 0.5:
+            found.append((0.0, "%s hit it (re-flown)" % what))
+        elif seen.get("reason") == "hit" and seen.get("aircraft_index") == n \
+                and t0 - 2.0 - seen.get("delay", 0.0) <= seen["t"] <= t1 + 0.5:
+            found.append((0.1, "%s hit it as the shooter's game showed it (re-flown there; %.2f s late)"
+                          % (what, seen.get("delay", 0.0))))
+        elif w.get("path") and w["path"][-1][0] >= t0 - 2.0:
+            close = _missile_pass(w, tr, t0 - 2.0, t1 + 0.5)
+            if close is not None and close[0] <= MISSILE_NEAR:
+                found.append((1.0 + close[0] / 1000.0, "%s passed %.0f m away (re-flown)" % (what, close[0])))
+    b0 = bisect.bisect_left(ctx.boom_t, t0 - 1.5)
+    for x in ctx.booms[b0:bisect.bisect_right(ctx.boom_t, t1 + 0.5)]:
+        d = math.dist((x["x"], x["y"], x["z"]), tr.at(x["t"]))
+        by = x.get("caused_by", "N")
+        if grp["down"] and by in (None, "N") and x["t"] >= t0 - 0.1:
+            continue                               # its own crash, most likely
+        if d < 100.0:
+            found.append((2.0 + d / 1000.0, "an explosion %.0f m away%s" % (
+                d, ", caused by %s" % ctx.name(by) if by and by != "N" else "")))
+    p1 = tr.at(t1)
+    agl = p1[1] - ctx.ground(p1[0], p1[2])
+    if agl < 15.0:
+        found.append((0.2, "it was %.0f m above the ground" % max(agl, 0.0)))
+    for rockets in (False, True):
+        for owner, ps in _gun_passes(ctx, n, label, t1 + 0.3, reach=GUN_NEAR, window=t1 - t0 + 2.0,
+                                     rockets=rockets).items():
+            best = min(p[1] for p in ps)
+            found.append((3.0 + best / 1000.0, "%d %s from %s passed within %.0f m" % (
+                len(ps), ("rocket(s)" if rockets else "round(s)"), ctx.name(owner), max(best, 1.0))))
+    if grp["overg"]:
+        found.append((0.5, "pulling %.1f G (RvB's servers take health above about %.0f G)" % (grp["g"], OVER_G)))
+    near = _nearest_aircraft(ctx, n, t0 + 0.2)
+    if near is not None and near[1] < COLLIDE_NEAR:
+        found.append((1.5, "%s passed %.0f m from it" % (ctx.name("A%d" % near[0]), near[1])))
+    if not found:
+        return ["nothing the replays show was near it (a hit they don't record, or lag)"]
+    found.sort(key=lambda f: f[0])
+    return [f[1] for f in found[:4]]
+
+
+def _crash_neighbours(ctx, n, t):
+    """For a crash: the nearest other aircraft and ground object at that moment, and how fast the
+    aircraft was closing on them, so scorers can judge a kamikaze quickly."""
+    tr = ctx.tracks[n]
+    pos = tr.at(t)
+    me = ctx.aircraft[n]
+    lines = []
+    best = None
+    for m, other in ctx.tracks.items():
+        if m == n or ctx.aircraft[m]["player"] == me["player"] or not (other.start <= t <= other.end):
+            continue
+        d = math.dist(pos, other.at(t))
+        if best is None or d < best[1]:
+            best = (m, d)
+    if best is not None and best[1] < 20000.0:
+        m, d = best
+        closing = _closing(tr, ctx.tracks[m], t)
+        lines.append("Nearest aircraft then: %s, %s, %s, %s." % (
+            ctx.name("A%d" % m), "same team" if ctx.aircraft[m]["iff"] == me["iff"] else "other team", _distance(d),
+            "closing at %.0f kt" % (closing * MS_TO_KT) if closing > 5.0 else
+            ("moving apart" if closing < -5.0 else "keeping its distance")))
+    gbest = None
+    for k, g in enumerate(ctx.ground_objects):
+        if not (g.get("dat") or {}).get("solid", True):
+            continue                                # clouds
+        if g.get("destroyed_t") is not None and g["destroyed_t"] < t - 1.0:
+            continue
+        gp = _ground_at(g, t)
+        if gp is not None:
+            d = math.dist(pos, gp)
+            if gbest is None or d < gbest[1]:
+                gbest = (k, d)
+    if gbest is not None and gbest[1] < 5000.0:
+        g = ctx.ground_objects[gbest[0]]
+        lines.append("Nearest ground object then: %s, %s, %s." % (
+            ctx.name("G%d" % gbest[0]), {1: "Blue", 4: "Red"}.get(g.get("iff"), "neutral"), _distance(gbest[1])))
+    return lines
+
+
+def _closing(a, b, t):
+    """How fast (m/s) track a closes on track b around time t (negative: moving apart)."""
+    t0 = t - 0.5
+    pa, pb = a.at(t), b.at(t)
+    qa, qb = a.at(t0), b.at(t0)
+    d1, d0 = math.dist(pa, pb), math.dist(qa, qb)
+    return (d0 - d1) / 0.5
+
+
+def _ground_at(g, t):
+    """A ground object's position at time t (its last sample before then), or None."""
+    samples = g.get("samples") or []
+    if not samples:
+        return None
+    at = samples[0]
+    for sm in samples:
+        if sm["t"] <= t:
+            at = sm
+    return (at["x"], at["y"], at["z"])
+
+
+def _distance(d):
+    return "%.0f m away" % d if d < 1000.0 else "%.1f km away" % (d / 1000.0)

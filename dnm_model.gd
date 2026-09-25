@@ -24,10 +24,21 @@ const ANGLE = PI / 32768.0
 const GEAR = 0
 const AFTERBURNER = 2
 const CACHE_DIR = "user://model_cache"
-const CACHE_FORMAT = 1       # raise when parse() changes, so old cached models are read again
+const CACHE_FORMAT = 2       # raise when parse() changes, so old cached models are read again
+# .srf keywords come short or long (weapon models use both): V/VER point (inside a face: its
+# point numbers), F/FAC face, C/COL colour, N/NOR normal, B/BRI bright, E/END end of face
+const SRF_WORDS = {"VER": "V", "FAC": "F", "COL": "C", "NOR": "N", "BRI": "B", "END": "E"}
 enum Kind {LIT, BRIGHT, CLEAR}
 
 static var _materials := []
+static var glossy := false    # better lighting (View tab): shinier faces, so the shape reads
+
+# Better lighting on or off for every model made from here (aircraft, ground objects, weapons).
+static func set_lighting(better: bool) -> void:
+	glossy = better
+	for k in [Kind.LIT, Kind.CLEAR]:
+		if k < _materials.size():
+			_materials[k].roughness = 0.35 if better else 1.0
 
 # parse(), from a cache file when the model was read before (user://model_cache, one file per
 # model, kept while the model file is unchanged): reading a model is slow in GDScript, loading
@@ -258,7 +269,7 @@ static func _surf(lines: PackedStringArray) -> Dictionary:
 		var a := line.strip_edges().split(" ", false)
 		if a.is_empty():
 			continue
-		match a[0]:
+		match SRF_WORDS.get(a[0].to_upper(), a[0]):
 			"V":
 				if face == null:
 					if a.size() >= 4:
@@ -391,6 +402,8 @@ static func _material(bright: bool, clear: bool) -> StandardMaterial3D:
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED      # YSFlight draws both sides of a face
 	if bright:
 		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	else:
+		m.roughness = 0.35 if glossy else 1.0
 	if clear:
 		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	return m

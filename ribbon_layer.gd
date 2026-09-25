@@ -1,8 +1,8 @@
 extends Node3D
 # Energy ribbons: a strip behind each aircraft over the last few seconds, coloured by its speed
 # (red slow, yellow, green fast) and turned with its wings, so rolls and turns show as well.
-# Smoke trails: black smoke behind an aircraft from the moment it starts going down (flight state
-# 4 or 5, tumbling) to where its track ends, so the exact point of death shows; the smoke stays a
+# Smoke trails: black smoke behind an aircraft from the moment it starts going down for good
+# (flight state 4 or 5, tumbling, until its track ends) to where its track ends, so the exact point of death shows; the smoke stays a
 # minute after the aircraft is gone, then fades.
 # build_arrays() runs once per event on the loader thread; after that the only work per frame is
 # one shader value, "now": the shaders hide every part of a strip outside its time window,
@@ -15,7 +15,7 @@ extends Node3D
 const Main = preload("res://node_3d.gd")
 const STEP = 0.25            # seconds between ribbon points (the track has 20 per second)
 const GAP = 2.0              # a longer gap in the track breaks the ribbon
-const HALF_WIDTH = 4.0       # metres each side of the track at aircraft size 1
+const HALF_WIDTH = 4.0       # metres each side of the track at ribbon width 1
 const MS_TO_KT = 1.943844
 const SLOW_KT = 150.0        # red at or below
 const FAST_KT = 550.0        # green at or above (yellow halfway)
@@ -94,18 +94,19 @@ var smoke_node: Node3D
 static func build_arrays(entities: Dictionary) -> Dictionary:
 	return {"ribbons": _ribbon_arrays(entities), "smoke": _smoke_arrays(entities)}
 
-# The falling part of each track that has one: from the first tumbling sample to the end.
+# The falling part of each track that has one: the tumble the track ends in (the final stretch of
+# states 3/4/5, if it has a 4 or 5; as event_merge.sortie_end). A replay can show an aircraft
+# tumbling for a moment and then flying on (lag): that is no death and gets no smoke.
 static func _smoke_arrays(entities: Dictionary) -> Array:
 	var out := []
 	for id in entities:
 		var frames: Array = entities[id].get("telemetry", [])
-		var start := -1
-		for i in frames.size():
-			var state := int(frames[i]["ctrl"][0])
-			if state == 4 or state == 5:
-				start = i
-				break
-		if start < 0 or start >= frames.size() - 1:
+		var start := frames.size()
+		var tumbled := false
+		while start > 0 and int(frames[start - 1]["ctrl"][0]) in [3, 4, 5]:
+			start -= 1
+			tumbled = tumbled or int(frames[start]["ctrl"][0]) != 3
+		if not tumbled or start >= frames.size() - 1:
 			continue
 		var pts := PackedVector3Array()
 		var ts := PackedFloat64Array()
@@ -226,12 +227,13 @@ func update(t: float) -> void:
 	material.set_shader_parameter("now", t)
 	smoke_material.set_shader_parameter("now", t)
 
-# ribbons on/off, their length, the aircraft size (widths), smoke on/off
-func set_view(ribbons_on: bool, seconds: float, aircraft_scale: float, smoke_on: bool) -> void:
+# ribbons on/off, their length, their width (the View tab's ribbon width, 1 = true size; the
+# aircraft size setting does not widen them), smoke on/off
+func set_view(ribbons_on: bool, seconds: float, width: float, smoke_on: bool) -> void:
 	get_child(0).visible = ribbons_on
 	smoke_node.visible = smoke_on
 	material.set_shader_parameter("window", seconds)
-	material.set_shader_parameter("half_width", HALF_WIDTH * aircraft_scale)
+	material.set_shader_parameter("half_width", HALF_WIDTH * width)
 	material.set_shader_parameter("slow_kt", SLOW_KT)
 	material.set_shader_parameter("fast_kt", FAST_KT)
-	smoke_material.set_shader_parameter("half_width", SMOKE_HALF_WIDTH * aircraft_scale)
+	smoke_material.set_shader_parameter("half_width", SMOKE_HALF_WIDTH * width)

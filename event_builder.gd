@@ -1,7 +1,10 @@
 extends Node
 # Runs the Python pipeline (replay_parser.py) that turns .yfs replays into an event file, on a
 # background thread, and reports its progress. The pipeline prints "PROGRESS <percent> <text>".
-# (For the finished .exe the pipeline will be a bundled program instead of "python".)
+# Python: the one bundled with the .exe (python\python.exe next to it) if there is one, else the
+# one on the PATH ("python"; "python3" off Windows).
+
+const Paths = preload("res://paths.gd")
 
 signal progress(percent: int, text: String)
 signal finished(ok: bool, event_path: String, log_text: String)
@@ -22,7 +25,7 @@ func build(replays: PackedStringArray, fld_path: String, out_path: String) -> bo
 		return false
 	if _thread != null and _thread.is_started():
 		_thread.wait_to_finish()
-	var args := PackedStringArray(["-X", "utf8", ProjectSettings.globalize_path("res://replay_parser.py"),
+	var args := PackedStringArray(["-X", "utf8", Paths.of("replay_parser.py"),
 		"--fld", fld_path, "-o", out_path])
 	args.append_array(replays)
 	_out_path = out_path
@@ -34,8 +37,14 @@ func build(replays: PackedStringArray, fld_path: String, out_path: String) -> bo
 	_thread.start(_run.bind(args))
 	return true
 
+static func python() -> String:
+	var bundled := Paths.of("python/python.exe")
+	if FileAccess.file_exists(bundled):
+		return bundled
+	return "python" if OS.get_name() == "Windows" else "python3"
+
 func _run(args: PackedStringArray) -> void:   # background thread
-	var p := OS.execute_with_pipe("python", args)
+	var p := OS.execute_with_pipe(python(), args)
 	if p.is_empty():
 		_push("ERROR: could not start Python (is it installed and on the PATH?)")
 		_finish(false)

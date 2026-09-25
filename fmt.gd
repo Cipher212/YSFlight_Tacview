@@ -3,6 +3,9 @@
 const WEAPONS = {"AIM9": "AIM-9", "AIM9X": "AIM-9X", "AIM120": "AIM-120", "AGM65": "AGM-65",
 	"GUN": "gun", "ROCKET": "rocket", "BOMB500": "bomb", "BOMB250": "bomb", "BOMB500HD": "bomb",
 	"FUELTANK": "fuel tank", "FLARE": "flare"}
+# weapon names in a loadout (the replay's WPNCFG lines use the .dat names)
+const LOADOUT = {"B500": "500 lb bomb", "B250": "250 lb bomb", "B500HD": "500 lb bomb (high drag)",
+	"RKT": "rocket", "FLR": "flare", "IFLR": "flare", "SMK": "smoke"}
 
 # 754.2 -> "12:34", 3725 -> "1:02:05"
 @warning_ignore("integer_division")
@@ -37,3 +40,19 @@ static func thousands(n: int) -> String:
 
 static func weapon(name: String) -> String:
 	return WEAPONS.get(name, name)
+
+# [["AIM120", 4], ["GUN", 500], ["FUEL", 1600]] -> "AIM-120 x4, gun 500 rounds, external fuel 1600"
+static func loadout(cfg: Array) -> String:
+	var parts := []
+	for c in cfg:
+		var name := str(c[0])
+		var n := int(c[1])
+		if n <= 0:
+			continue
+		if name == "GUN":
+			parts.append("gun %d rounds" % n)
+		elif name == "FUEL":
+			parts.append("external fuel %d" % n)
+		else:
+			parts.append("%s x%d" % [LOADOUT.get(name, weapon(name)), n])
+	return ", ".join(parts) if not parts.is_empty() else "nothing"

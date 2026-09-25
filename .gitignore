@@ -13,3 +13,6 @@
 __pycache__/
 *.pyc
 *.tmp
+
+# Windows package made by tools/package.py
+/build/
