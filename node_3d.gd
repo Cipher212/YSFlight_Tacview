@@ -81,7 +81,7 @@ const VIEW_DEFAULTS = {"aircraft_scale": 1.0, "weapon_scale": 1.0, "text_scale":
 	"trail_seconds": 30.0, "ribbon_width": 1.0, "marker_seconds": 30.0, "ribbons": true,
 	"vectors": true, "tags": true, "tethers": true, "markers": true, "ground": true, "clouds": true,
 	"blocky": false, "smoke": true, "shadows": true, "ranges": false, "lighting": true,
-	"cine_shake": 1.0, "cine_slow": 0.25, "cine_orbit": 12.0, "cine_crane": 5.0,
+	"cine_shake": 1.0, "cine_slow": 0.25, "cine_crane": 5.0, "cine_smooth": true,
 	"cine_stick": false, "cine_stick_speed": 90.0, "cine_stick_invert": false, "cine_guides": true}
 
 var camera: Camera3D
@@ -758,10 +758,12 @@ func _process(delta):
 	if grounds:
 		grounds.update(replay_time)
 
-	if cinema.on:
+	if cinema.on and not top_view:
 		cinema.update(delta)
 	else:
 		_update_camera(delta)
+		if cinema.on:
+			cinema.update_top(delta)
 	_draw_vectors(vector_items, size)
 	ui.refresh(replay_time, playing, playback_speed, play_direction)
 	ui.set_info(_info_text())
@@ -838,6 +840,8 @@ func set_top_view(on: bool) -> void:
 			cam_rot_x = _saved_view["rot_x"]
 			cam_rot_y = _saved_view["rot_y"]
 	ui.show_top_view(on)
+	if cinema.on:
+		cinema.top_view_changed(on)
 
 # Better lighting (View tab) or YSFlight's flat daylight: the hills lit by a lower sun
 # (map_layer.gd); the models shinier, lit from that same sun, shading themselves (their own
@@ -1206,6 +1210,7 @@ func set_cinema(on: bool) -> void:
 				follow(near)
 		cinema.enter()
 	else:
+		set_top_view(false)
 		cinema.leave()
 		var e := camera.global_transform.basis.get_euler()   # the free / follow camera from here
 		cam_rot_x = clampf(e.x, -1.5, 1.5)
@@ -1411,7 +1416,7 @@ func _key(event: InputEventKey) -> bool:
 	return true
 
 func _unhandled_input(event):
-	if cinema.on:
+	if cinema.on and not top_view:
 		cinema.mouse(event)
 		return
 	if event is InputEventMouseButton and event.pressed:

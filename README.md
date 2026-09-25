@@ -90,7 +90,7 @@ smooth curve through the recorded positions and are always drawn at true size.
 | 2 | **Wingman**: beside it, keeping level (it doesn't copy the aircraft's pitch and roll) |
 | 3 | **Flyby**: waits just off the aircraft's path ahead, whips round as it roars past |
 | 4 | **Ground camera**: stays where the camera is (fly there with 9 first; on a moving ship it rides along) and pans after the aircraft, zooming like a long lens |
-| 5 | **Orbit**: circles the aircraft (it keeps circling when paused) |
+| 5 | **Orbit**: round the aircraft like the normal viewer's camera: it only turns when you turn it (right-drag or the stick), never by itself. The mode starts in it, from where the camera was: the calm view for watching and finding your next shot |
 | 6 | **Weapon**: rides behind the next missile or bomb the aircraft fires, to the end |
 | 7 | **Lock-on**: over the aircraft's shoulder with its target ahead (R: the next target) |
 | 8 | **Crane**: glides through 2 to 6 points set with K, easing in and out. While paused the path and its numbered points show on screen, with a line of keys: U removes the last point, Delete all of them, [ ] shorter / longer move, V ready-made moves round the aircraft (sweep, rise, push in, pull out, circle), G hides the helpers (and the shot names shown when pressing 1 or 0 again: hide them before recording) |
@@ -99,13 +99,15 @@ smooth curve through the recorded positions and are always drawn at true size.
 Every shot: Tab picks the aircraft; mouse wheel closer / further, **Ctrl+wheel** zoom,
 **Alt+wheel** background blur (focused on the aircraft), right-drag the angle; hold **Z** for a
 snap zoom, hold **X** for slow motion (it eases in and out); **Space** pauses (easing to a stop;
-orbit, crane and drone keep moving); **Backspace** is a retake from where Play was last
+crane and drone keep moving); **Backspace** is a retake from where Play was last
 pressed. **F7** makes the hidden mouse a flight stick, like YSFlight's old F7 / F8 view: move
 it a little off centre and the camera turns slowly, further and it turns faster (easing in and
 out); **F8** or the middle button puts the stick back in the centre. In the Flyby shot the
 camera shakes as aircraft rush past and with explosions nearby (View tab: Flyby shake); the
-other shots keep still. The View tab also sets the slow motion speed, orbit speed, crane move
-time and stick speed, and **Keys...** changes any key (click it, press the new one).
+other shots keep still. **B** turns the camera smoothing off and on (off: the camera sticks
+to the aircraft exactly, no easing). **T** is the top view here too (wheel zoom, right-drag
+move, click to follow; T or a shot key goes back). The View tab also sets the slow motion
+speed, crane move time and stick speed, and **Keys...** changes any key (click it, press the new one).
 
 **F9** (also outside the cinematic mode) saves the followed aircraft's flight path (40 seconds
 round now) in a small `.txt` next to the event file: send it along if an aircraft looks shaky.

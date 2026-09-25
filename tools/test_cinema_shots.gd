@@ -145,4 +145,12 @@ func _init():
 		c.key("help", false)
 		await shot("j_key_list")
 		c.key("help", false)
+	if only == "" or only.contains("k"):
+		main.follow("1")
+		c.set_shot(5)
+		at(150.0)
+		await shot("k_orbit")
+		main.set_top_view(true)
+		await shot("k_top_view")
+		main.set_top_view(false)
 	quit()

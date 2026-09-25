@@ -29,7 +29,10 @@ extends Node
 #                 on a moving ship it rides along) and pans after the aircraft like someone with a
 #                 long lens: the zoom keeps the aircraft the same size in the picture (wheel: how
 #                 big). Steering: off-centre framing.
-#   5 Orbit       circles the aircraft (View tab: how fast; it keeps circling when paused).
+#   5 Orbit       round the aircraft from a direction fixed in the world, like the normal viewer's
+#                 follow camera: it turns only when steered (not by itself, not with the
+#                 aircraft), for watching calmly and finding the next shot. The mode starts in it,
+#                 from where the camera was.
 #   6 Weapon      rides behind the next missile or bomb the aircraft fires, to the end, stays
 #                 there a moment, then goes back to the chase.
 #   7 Lock-on     over the aircraft's shoulder with its target in the picture (the target of its
@@ -48,6 +51,8 @@ extends Node
 # the further the mouse from the centre, the faster the camera turns (not at all near the middle),
 # easing in and out; F8 or the middle button: back to the centre. Turning is as fast on screen at
 # any zoom.
+# T: the top view, as outside the mode (wheel, right-drag, click to follow); T or a shot key: back.
+# B: smooth camera on / off (off: the cameras stick to the aircraft exactly, no easing).
 # Every shot: wheel = closer / further, Ctrl+wheel = zoom (field of view), Alt+wheel = background
 # blur (depth of field, focused on the aircraft), hold Z = snap zoom, hold X = slow motion (eases
 # in and out), Space = pause (eases to a stop; the camera can still move: orbit, crane, drone),
@@ -113,7 +118,7 @@ const DECK_MARGIN = 25.0         # ground camera: rides a moving object only thi
 
 var main                         # node_3d.gd
 var on := false
-var shot: int = Shot.CHASE
+var shot: int = Shot.ORBIT        # the calm one to start with: look round, find the shot
 var chase_kind: int = Kind.CHASE
 var ghost_kind: int = Mount.BEHIND
 var rate := 1.0                  # how fast the replay's clock runs now (slow motion, pauses)
@@ -145,7 +150,8 @@ var _deck_local := Vector3.ZERO
 var _auto_fov := FOV
 var _focus := 300.0              # eased focus distance (background blur)
 var _zoom := 0.0                 # snap zoom, 0..1
-var _orbit := 0.0
+var _orb_yaw := 0.0              # orbit: the direction it looks from (world), turned only by hand
+var _orb_pitch := -0.3
 var _weapon = null               # weapon camera: the weapon followed (combat_layer's dictionary)
 var _weapon_pos := Vector3.ZERO  # where it is (or ended)
 var _target := ""                # lock-on target
@@ -175,7 +181,7 @@ var _noise := FastNoiseLite.new()
 var _last_t := 0.0               # replay time last frame
 var _take_t := 0.0               # Retake: where Play was last pressed
 var _take_cam := Transform3D()
-var _take_orbit := 0.0
+var _take_orbit := []
 var _attrs := CameraAttributesPractical.new()
 var _overlay: CanvasLayer
 var _hint: Label
@@ -268,6 +274,8 @@ func enter() -> void:
 		_park(base.origin)
 	elif shot == Shot.CHASE and chase_kind == Kind.OUTSIDE:
 		_start_outside()
+	elif shot == Shot.ORBIT:
+		_start_orbit()
 	main.camera.attributes = _attrs
 	main.camera.near = 0.1
 	_overlay.visible = true
@@ -286,6 +294,34 @@ func leave() -> void:
 	main.camera.global_transform = base
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_overlay.visible = false
+
+# The top view (T) in the cinematic mode: node_3d.gd moves the camera there (wheel, drag, click
+# to follow, as outside the mode); back in 3D the shot carries on from where it was.
+func top_view_changed(top: bool) -> void:
+	if top:
+		main.camera.attributes = null
+		guides.hide_path()
+		_help.visible = false
+		show_hint("Top view   |   Wheel: Zoom   |   Right-drag: Move   |   Click: Follow   |   %s or 0-9: Back to 3D" %
+			main.keys.short_name("top"), 4.0)
+	else:
+		main.camera.attributes = _attrs
+		main.camera.near = 0.1
+		_cut = true
+
+# Each frame while the top view is on: the effects and hints go on; the mouse pointer shows.
+func update_top(delta: float) -> void:
+	if Input.mouse_mode == Input.MOUSE_MODE_HIDDEN:
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	if fx != null:
+		fx.update(main.replay_time, main.camera.global_position)
+	_last_t = main.replay_time
+	_cut = true
+	if _hint_clock > 0.0:
+		_hint_clock -= delta
+		_hint.modulate.a = clampf(_hint_clock / 0.6, 0.0, 1.0)
+		if _hint_clock <= 0.0:
+			_hint.text = ""
 
 # The event is being unloaded (its effects go with it).
 func event_cleared() -> void:
@@ -306,7 +342,7 @@ func cut() -> void:
 func note_play() -> void:
 	_take_t = main.replay_time
 	_take_cam = base
-	_take_orbit = _orbit
+	_take_orbit = [_orb_yaw, _orb_pitch, aim[Shot.ORBIT], reach[Shot.ORBIT]]
 
 # How fast the replay's clock runs now: eases towards full speed, towards the slow motion speed
 # while the slow motion key is held, and towards a stop when paused.
@@ -327,6 +363,8 @@ func stop_now() -> void:
 # A key of the cinematic mode; false if the action isn't one.
 func key(action: String, shift: bool) -> bool:
 	if action.begins_with("shot_"):
+		if main.top_view:                    # a shot key leaves the top view for that shot
+			main.set_top_view(false)
 		set_shot(int(action.substr(5)), shift)
 		return true
 	match action:
@@ -346,6 +384,10 @@ func key(action: String, shift: bool) -> bool:
 			_name_hint("Crane move: %.1f s" % float(main.view["cine_crane"]))
 		"crane_preset":
 			_crane_preset()
+		"smooth":
+			_set_view("cine_smooth", not bool(main.view["cine_smooth"]))
+			show_hint("Smooth camera %s" % ("on" if main.view["cine_smooth"] else
+				"off: the camera sticks to the aircraft exactly"), 1.5)
 		"guides":
 			_set_view("cine_guides", not bool(main.view["cine_guides"]))
 			show_hint("Guides %s" % ("on (crane path while paused, shot names)" if main.view["cine_guides"] else "off"), 1.5)
@@ -404,6 +446,8 @@ func set_shot(n: int, back := false) -> void:
 				ghost_kind = posmod(ghost_kind + (-1 if back else 1), MOUNT_NAMES.size())
 				aim[Shot.GHOST] = Vector2.ZERO
 			_name_hint("%s  Ghost camera: %s" % [main.keys.short_name("shot_0"), MOUNT_NAMES[ghost_kind]])
+		Shot.ORBIT:
+			_start_orbit()
 		Shot.FLYBY:
 			_spot_t = -INF
 		Shot.GROUND:
@@ -431,7 +475,11 @@ func retake() -> void:
 	rate = float(main.view["cine_slow"]) if main.keys.held("slow_motion") else 1.0
 	_crane_clock = 0.0
 	_crane_running = shot == Shot.CRANE and _crane.size() >= 2
-	_orbit = _take_orbit
+	if _take_orbit.size() == 4:
+		_orb_yaw = _take_orbit[0]
+		_orb_pitch = _take_orbit[1]
+		aim[Shot.ORBIT] = _take_orbit[2]
+		reach[Shot.ORBIT] = _take_orbit[3]
 	_weapon = null
 	if shot == Shot.DRONE:
 		_start_drone(cam)
@@ -542,7 +590,7 @@ func _update_stick(delta: float) -> void:
 			var strength := pow((m - STICK_DEAD) / (1.0 - STICK_DEAD), 1.6)
 			var dir := Vector2(d.x, -d.y if not bool(main.view["cine_stick_invert"]) else d.y) / m
 			want = dir * strength * deg_to_rad(float(main.view["cine_stick_speed"]))
-	_stick_rate = _stick_rate.lerp(want, _k(6.0, delta))
+	_stick_rate = _stick_rate.lerp(want, _e(6.0, delta))
 	if _stick_rate.length() > 1e-4:
 		_steer(_stick_rate * delta * _zoom_factor())
 
@@ -572,8 +620,8 @@ func update(delta: float) -> void:
 	_update_mouse_mode()
 	_update_stick(delta)
 	for k in reach:
-		_reach_s[k] = reach[k] if _cut else lerpf(_reach_s[k], reach[k], _k(8.0, delta))
-		_aim_s[k] = aim[k] if _cut else _aim_s[k].lerp(aim[k], _k(12.0, delta))
+		_reach_s[k] = reach[k] if _cut else lerpf(_reach_s[k], reach[k], _e(8.0, delta))
+		_aim_s[k] = aim[k] if _cut else _aim_s[k].lerp(aim[k], _e(12.0, delta))
 	var focus := -1.0                                 # metres to what's in focus
 	match shot:
 		Shot.CHASE:
@@ -601,9 +649,8 @@ func update(delta: float) -> void:
 		Shot.GROUND:
 			base = _ground(s, dts)
 		Shot.ORBIT:
-			_orbit += deg_to_rad(float(main.view["cine_orbit"])) * delta
 			if not s.is_empty():
-				base = _orbit_shot(s, dts)
+				base = _orbit_shot(s)
 		Shot.WEAPON:
 			var b = _weapon_shot(s, dts, t)
 			if b != null:
@@ -652,11 +699,11 @@ func _chase(s: Dictionary, dts: float) -> Transform3D:
 	var up := Vector3.UP
 	if level:
 		var f := _flight_dir(s)
-		_dir = f if _cut else _slerp(_dir, f, _k(3.5, dts))
+		_dir = f if _cut else _slerp(_dir, f, _e(3.5, dts))
 		frame = _frame_along(_dir)
 	else:
 		var q: Quaternion = s["basis"].get_rotation_quaternion()
-		_q = q if _cut else _q.slerp(q, _k(3.5, dts))
+		_q = q if _cut else _q.slerp(q, _e(3.5, dts))
 		frame = Basis(_q)
 		up = frame.y
 	var pos: Vector3 = s["pos"] + frame * (Basis.from_euler(Vector3(-0.12 + a.y, a.x, 0.0)) * Vector3(0.0, 0.0, d))
@@ -742,7 +789,7 @@ func _start_outside() -> void:
 func _ghost(s: Dictionary, dts: float) -> Transform3D:
 	var box := _subject_box(s["id"])
 	var q: Quaternion = s["basis"].get_rotation_quaternion()
-	_q = q if _cut else _q.slerp(q, _k(9.0, dts))
+	_q = q if _cut else _q.slerp(q, _e(9.0, dts))
 	var att := Basis(_q)
 	var mount := _mount(box, ghost_kind)
 	var c := box.get_center()
@@ -803,7 +850,7 @@ func _wingman(s: Dictionary, dts: float) -> Transform3D:
 	var a: Vector2 = _aim_s[Shot.WINGMAN]
 	_ease_heading(s, dts, 2.5)
 	var off := Basis.from_euler(Vector3(-0.06 + a.y, _yaw + PI * 0.5 + a.x, 0.0)) * Vector3(0.0, 0.0, d)
-	_rel = off if _cut else _rel.lerp(off, _k(3.0, dts))
+	_rel = off if _cut else _rel.lerp(off, _e(3.0, dts))
 	return _looking(s["pos"] + _rel, s["pos"] + _flight_dir(s) * d * 0.15)
 
 func _flyby(s: Dictionary, dts: float, back: bool) -> Transform3D:
@@ -811,7 +858,7 @@ func _flyby(s: Dictionary, dts: float, back: bool) -> Transform3D:
 		_place_flyby(s, back)
 	var target: Vector3 = main.track_aim(s["id"], main.replay_time)
 	var to: Vector3 = (target - _spot).normalized()
-	_look = to if _cut else _slerp(_look, to, _k(9.0, dts))
+	_look = to if _cut else _slerp(_look, to, _e(9.0, dts))
 	return Transform3D(_pan_tilt(_look), _spot)
 
 # A new flyby is due once the aircraft has gone well past, or never came (it turned away), or the
@@ -853,12 +900,12 @@ func _ground(s: Dictionary, dts: float) -> Transform3D:
 		return Transform3D(base.basis, pos)
 	var target: Vector3 = main.track_aim(s["id"], main.replay_time)
 	var to: Vector3 = (target - pos).normalized()
-	_look = to if _cut else _slerp(_look, to, _k(3.5, dts))
+	_look = to if _cut else _slerp(_look, to, _e(3.5, dts))
 	# long lens: the aircraft stays about the same size in the picture
 	var dist: float = maxf(pos.distance_to(target), 1.0)
 	var want := rad_to_deg(2.0 * atan(AIRCRAFT_SIZE * 0.5 / dist) / float(_reach_s[Shot.GROUND]))
 	want = clampf(want, 1.0, fov)
-	_auto_fov = want if _cut else lerpf(_auto_fov, want, _k(3.0, dts))
+	_auto_fov = want if _cut else lerpf(_auto_fov, want, _e(3.0, dts))
 	# framing (steering): the aircraft off the centre, in fractions of half the picture
 	var a: Vector2 = _aim_s[Shot.GROUND]
 	var half := deg_to_rad(_auto_fov) * 0.5
@@ -915,12 +962,27 @@ static func _deck_pose(samples: Array, t: float) -> Transform3D:
 	fwd.y = 0.0
 	return Transform3D(Basis.looking_at(fwd.normalized(), Vector3.UP), sum / total)
 
-func _orbit_shot(s: Dictionary, dts: float) -> Transform3D:
-	var d: float = _reach_s[Shot.ORBIT]
+# Like the normal viewer's follow camera: round the aircraft from a direction fixed in the world
+# (it doesn't turn when the aircraft turns, nor by itself); only steering turns it.
+func _orbit_shot(s: Dictionary) -> Transform3D:
 	var a: Vector2 = _aim_s[Shot.ORBIT]
-	_ease_heading(s, dts, 2.0)
-	var off := Basis.from_euler(Vector3(-0.22 + a.y, _yaw + _orbit + a.x, 0.0)) * Vector3(0.0, 0.0, d)
-	return _looking(s["pos"] + off, s["pos"])
+	var view := Basis.from_euler(Vector3(clampf(_orb_pitch + a.y, -1.5, 1.5), _orb_yaw + a.x, 0.0))
+	return Transform3D(view, s["pos"] + view.z * float(_reach_s[Shot.ORBIT]))
+
+# The orbit starts where the camera is now (direction and distance), so switching to it is calm.
+func _start_orbit() -> void:
+	var s := _subject()
+	if s.is_empty():
+		return
+	var d: float = base.origin.distance_to(s["pos"])
+	if d > 1.0:
+		var dir: Vector3 = (s["pos"] - base.origin) / d
+		_orb_yaw = atan2(-dir.x, -dir.z)
+		_orb_pitch = asin(clampf(dir.y, -0.99, 0.99))
+		reach[Shot.ORBIT] = clampf(d, REACH[Shot.ORBIT][1], REACH[Shot.ORBIT][2])
+		_reach_s[Shot.ORBIT] = reach[Shot.ORBIT]
+	aim[Shot.ORBIT] = Vector2.ZERO
+	_aim_s[Shot.ORBIT] = Vector2.ZERO
 
 # Behind the weapon the aircraft fired last (still flying), looking the way it flies; after it
 # ends, a moment looking at where it ended; with none, the chase.
@@ -934,7 +996,7 @@ func _weapon_shot(s: Dictionary, dts: float, t: float):
 			_cut = true
 		var head: Array = main.combat.weapon_head(w, t)
 		_weapon_pos = head[0]
-		_dir = head[1] if _cut else _slerp(_dir, head[1], _k(5.0, dts))
+		_dir = head[1] if _cut else _slerp(_dir, head[1], _e(5.0, dts))
 		var d: float = _reach_s[Shot.WEAPON]
 		var a: Vector2 = _aim_s[Shot.WEAPON]
 		var frame := _frame_along(_dir)
@@ -942,7 +1004,7 @@ func _weapon_shot(s: Dictionary, dts: float, t: float):
 		return _looking(pos, _weapon_pos + _dir * d * 2.5)
 	if _weapon != null and t > float(_weapon["end"]["t"]) and t < float(_weapon["end"]["t"]) + WEAPON_HOLD:
 		var to := (_weapon_pos - base.origin).normalized()
-		_look = to if _cut else _slerp(_look, to, _k(4.0, dts))
+		_look = to if _cut else _slerp(_look, to, _e(4.0, dts))
 		return _looking(base.origin, base.origin + _look)
 	if _weapon != null:
 		_weapon = null
@@ -972,12 +1034,12 @@ func _lock_on(s: Dictionary, dts: float) -> Transform3D:
 		return _chase(s, dts)
 	var target: Vector3 = main.active_aircraft[tg].position
 	var to: Vector3 = (target - s["pos"]).normalized()
-	_dir = to if _cut else _slerp(_dir, to, _k(4.0, dts))
+	_dir = to if _cut else _slerp(_dir, to, _e(4.0, dts))
 	var d: float = _reach_s[Shot.LOCK_ON]
 	var a: Vector2 = _aim_s[Shot.LOCK_ON]
 	var frame := _frame_along(_dir)
 	var off := frame * (Basis.from_euler(Vector3(-0.26 + a.y, 0.34 + a.x, 0.0)) * Vector3(0.0, 0.0, d))
-	_rel = off if _cut else _rel.lerp(off, _k(5.0, dts))
+	_rel = off if _cut else _rel.lerp(off, _e(5.0, dts))
 	var pos: Vector3 = s["pos"] + _rel
 	return _looking(pos, pos + _dir * 100.0 + (s["pos"] - pos) * 0.35)
 
@@ -1083,11 +1145,11 @@ func _drone(delta: float) -> Transform3D:
 	if k.held("move_up"): push += Vector3.UP
 	if k.held("move_down"): push += Vector3.DOWN
 	var speed: float = reach[Shot.DRONE] * (5.0 if Input.is_key_pressed(KEY_SHIFT) else 1.0)
-	_drone_vel = _drone_vel.lerp(push.normalized() * speed, _k(2.5, delta))
+	_drone_vel = _drone_vel.lerp(push.normalized() * speed, _e(2.5, delta))
 	_drone_pos += _drone_vel * delta
 	_drone_pos.y = maxf(_drone_pos.y, _ground_y(_drone_pos) + GROUND_CLEARANCE * 0.5)
-	_drone_yaw = lerp_angle(_drone_yaw, _drone_yaw_to, _k(10.0, delta))
-	_drone_pitch = lerpf(_drone_pitch, _drone_pitch_to, _k(10.0, delta))
+	_drone_yaw = lerp_angle(_drone_yaw, _drone_yaw_to, _e(10.0, delta))
+	_drone_pitch = lerpf(_drone_pitch, _drone_pitch_to, _e(10.0, delta))
 	return Transform3D(Basis.from_euler(Vector3(_drone_pitch, _drone_yaw, 0.0)), _drone_pos)
 
 # --- crane guides and the line of keys (while paused) ---
@@ -1191,6 +1253,11 @@ func _wobble(axis: int) -> float:
 static func _k(speed: float, dt: float) -> float:
 	return 1.0 - exp(-speed * dt)
 
+# The same for the camera's own easing: with View "Smooth camera" off (B) the camera sticks to
+# what it follows exactly (no lag; steering and the wheel act at once).
+func _e(speed: float, dt: float) -> float:
+	return _k(speed, dt) if bool(main.view["cine_smooth"]) else 1.0
+
 static func _slerp(a: Vector3, b: Vector3, w: float) -> Vector3:
 	if a.length_squared() < 1e-8 or b.length_squared() < 1e-8:
 		return b
@@ -1208,7 +1275,7 @@ static func _heading(s: Dictionary) -> float:
 
 func _ease_heading(s: Dictionary, dts: float, speed: float) -> void:
 	var h := _heading(s)
-	_yaw = h if _cut else lerp_angle(_yaw, h, _k(speed, dts))
+	_yaw = h if _cut else lerp_angle(_yaw, h, _e(speed, dts))
 
 # A frame looking along dir, without roll (up as near world up as it can be).
 func _frame_along(dir: Vector3) -> Basis:
@@ -1283,6 +1350,6 @@ func _key_lists() -> Array:
 	left.append("Right-drag  -  Turn the camera")
 	left.append("Middle button  -  Stick back to the centre")
 	left.append("")
-	left.append("View tab: Flyby shake, Slow motion, Orbit speed, Crane move,")
+	left.append("View tab: Flyby shake, Slow motion, Crane move, Smooth camera,")
 	left.append("Stick speed and more; Keys...")
 	return ["\n".join(left), "\n".join(right)]

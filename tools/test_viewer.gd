@@ -375,6 +375,10 @@ func _init():
 	await process_frame
 	await process_frame
 	check(cin.on and not ui.visible, "M: cinematic mode on, the side panel and bars hidden")
+	check(cin.shot == cin.Shot.ORBIT and absf(main.camera.global_position.distance_to(
+		main.active_aircraft[tester_id].position) - main.cam_distance) < 0.15 * main.cam_distance,
+		"it starts in the orbit, where the viewer's camera was (%.0f m, viewer %.0f m)" % [
+		main.camera.global_position.distance_to(main.active_aircraft[tester_id].position), main.cam_distance])
 	var tags_hidden := true
 	for id in main.aircraft_tags:
 		tags_hidden = tags_hidden and not main.aircraft_tags[id].visible
@@ -392,8 +396,47 @@ func _init():
 		for k in 6:
 			await process_frame
 		dists[n] = main.camera.global_position.distance_to(main.active_aircraft[tester_id].position)
-	check(absf(dists[1] - 26.0) < 3.0 and absf(dists[2] - 40.0) < 4.0 and absf(dists[5] - 45.0) < 4.0,
-		"chase %.0f m, wingman %.0f m, orbit %.0f m from the aircraft" % [dists[1], dists[2], dists[5]])
+	check(absf(dists[1] - 26.0) < 3.0 and absf(dists[2] - 40.0) < 4.0 and absf(dists[5] - 40.0) < 4.0,
+		"chase %.0f m, wingman %.0f m, orbit %.0f m from the aircraft (it starts where the wingman was)" % [
+		dists[1], dists[2], dists[5]])
+	cin.set_shot(5)
+	for k in 3:
+		await process_frame
+	var o0: Vector3 = (main.camera.global_position - main.active_aircraft[tester_id].position).normalized()
+	var turn0: Vector3 = -main.aircraft_attitude[tester_id].z
+	for k in 60:
+		await process_frame
+	var o1: Vector3 = (main.camera.global_position - main.active_aircraft[tester_id].position).normalized()
+	check(rad_to_deg(o0.angle_to(o1)) < 0.5, "orbit: doesn't turn by itself (%.2f deg while the aircraft turned %.1f deg)" % [
+		rad_to_deg(o0.angle_to(o1)), rad_to_deg(turn0.angle_to(-main.aircraft_attitude[tester_id].z))])
+	cin._steer(Vector2(0.4, 0.0))
+	for k in 30:
+		await process_frame
+	var o2: Vector3 = (main.camera.global_position - main.active_aircraft[tester_id].position).normalized()
+	check(rad_to_deg(o1.angle_to(o2)) > 15.0, "orbit: steering turns it (%.0f deg)" % rad_to_deg(o1.angle_to(o2)))
+	cin.key("smooth", false)
+	check(not main.view["cine_smooth"] and cin._e(3.0, 0.016) == 1.0 and cin._k(3.0, 0.016) < 0.1,
+		"B: smooth camera off (the camera's easing goes, the clock's stays)")
+	cin.key("smooth", false)
+	check(main.view["cine_smooth"] and cin._e(3.0, 0.016) < 0.1, "B again: smooth camera on")
+	var t_key := InputEventKey.new()
+	t_key.keycode = KEY_T
+	t_key.pressed = true
+	Input.parse_input_event(t_key)
+	await process_frame
+	await process_frame
+	check(cin.on and main.top_view and main.camera.projection == Camera3D.PROJECTION_ORTHOGONAL and not ui.visible,
+		"T: the top view inside the cinematic mode")
+	var top_y: float = main.camera.global_position.y
+	await process_frame
+	check(main.camera.global_position.y > 50000.0 and absf(main.camera.global_position.y - top_y) < 1.0,
+		"top view: the cinematic cameras leave it alone")
+	cin.key("shot_5", false)
+	await process_frame
+	await process_frame
+	check(not main.top_view and main.camera.projection == Camera3D.PROJECTION_PERSPECTIVE and main.camera.near < 0.2
+		and main.camera.global_position.distance_to(main.active_aircraft[tester_id].position) < 5000.0,
+		"a shot key: back to 3D, on that shot")
 	check(cin._target != "" and main.event_data["entities"][cin._target]["iff"] != main.event_data["entities"][tester_id]["iff"],
 		"lock-on: an enemy target (%s)" % main.event_data["entities"].get(cin._target, {}).get("player", "none"))
 	main.seek(61.0)
@@ -683,18 +726,18 @@ func _init():
 	ui.show_keys_window()
 	ui._capture_key("cinema")
 	var b_key := InputEventKey.new()
-	b_key.keycode = KEY_B
+	b_key.keycode = KEY_O
 	b_key.pressed = true
 	Input.parse_input_event(b_key)
 	await process_frame
 	await process_frame
-	check(main.keys.keys["cinema"] == KEY_B and ui._key_buttons["cinema"].text == "B", "Keys window: the cinematic mode moved to B")
+	check(main.keys.keys["cinema"] == KEY_O and ui._key_buttons["cinema"].text == "O", "Keys window: the cinematic mode moved to O")
 	ui._close_keys_window()
 	await process_frame
 	Input.parse_input_event(b_key)
 	await process_frame
 	await process_frame
-	check(not cin.on and ui.visible, "B now leaves it; the panel is back")
+	check(not cin.on and ui.visible, "O now leaves it; the panel is back")
 	check(main.aircraft_tags[tester_id].visible and main.camera.attributes == null,
 		"name tags and plain lens back")
 	main._on_keys_reset()

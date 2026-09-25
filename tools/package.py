@@ -94,7 +94,8 @@ decide and fill in the scoring sheet by hand, with the viewer's times (seconds s
    explode and aircraft burn as in the game, only better looking.
    Shots: 1 Chase (press 1 again: Chase plane, Trailing, Delayed, Outside), 2 Wingman,
    3 Flyby (waits beside the aircraft's path), 4 Ground camera (stays where the camera is and
-   zooms like a long lens: fly there with 9 first), 5 Orbit, 6 Weapon (rides the next missile
+   zooms like a long lens: fly there with 9 first), 5 Orbit (the calm one it starts in: it only
+   turns when you turn it), 6 Weapon (rides the next missile
    or bomb), 7 Lock-on (over the shoulder, target ahead; R: next target), 8 Crane (glides
    through points set with K), 9 Drone (WASD, E/Q, Shift), 0 Ghost camera fixed on the aircraft
    (press 0 again: behind, wing, front, top, belly, tail, nose).
@@ -107,7 +108,8 @@ decide and fill in the scoring sheet by hand, with the viewer's times (seconds s
    keys; U removes the last point, Delete all of them, [ ] shorter / longer move, V ready-made
    moves round the aircraft, G hides the helpers (and the shot names: press it before
    recording).
-   View tab: flyby shake, slow motion speed, orbit speed, crane move time, stick speed.
+   B: camera smoothing off / on. T: the top view (T or a shot key: back to 3D).
+   View tab: flyby shake, slow motion speed, crane move time, stick speed, smooth camera.
    F9 (any time): saves the followed aircraft's flight path to a small .txt next to the event,
    to send if an aircraft looks shaky.
 """

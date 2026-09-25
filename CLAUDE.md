@@ -189,6 +189,13 @@ shadows), `dnm_model.gd` (YSFlight `.dnm`/`.srf` models, cached in
   network by metres at each update (YSFlight's client snaps them to a blend of the last two
   updates by the ratio of local to remote time, FsAirplaneProperty::NetworkDecode, and flies them
   on in between); the test fight's tracks are clean, the user's weren't.
+  Orbit (5; user: "we're out of normal views" to calmly watch and find shots) is the viewer's
+  follow camera: a world-fixed direction round the aircraft, turned only by steering (no
+  auto-spin, no heading follow; the "Orbit speed" slider is gone); the mode starts in it from
+  the camera's direction and distance, and so does pressing 5. B / View "Smooth camera"
+  (`cine_smooth`): off makes the camera's easing (`cinema._e`) snap; the clock, rumble and
+  lens easing stay. T works in the mode: node_3d's top view drives the camera
+  (`cinema.update_top`: effects, hints, pointer shown; DOF off), T or a shot key goes back.
   Shots 0-9 as in `cinema.gd`'s header (chase with H level/roll - 1 again cycles the chase
   kinds: Chase plane (a follower with a spring, 0.85 x the lead's acceleration fed forward,
   at most 6 G, banking 60 % towards its lift), Trailing (on the track 2.5 x the wheel's metres
@@ -300,7 +307,8 @@ private: other scorers need to be collaborators to download, or the user shares 
   markers, ribbons, lists, jumps, the review file, ground objects, shadows, the Ground tab,
   health tags, damage log, crash finder, rings, top view, lighting and the folder pick;
   `tools/test_shots.gd` takes screenshots under `xvfb-run`, `tools/test_cinema_shots.gd` the
-  cinematic mode's (ONLY=a..i picks parts; h = chase kinds and ghost mounts, i = crane guides);
+  cinematic mode's (ONLY=a..k picks parts; h = chase kinds and ghost mounts, i = crane guides, j = the key
+  list, k = orbit and the top view);
   test_viewer also checks the cinematic mode (hiding, shot distances, lock-on, weapon cam,
   effects, flyby (also played backwards), ground cam, snap zoom, a track with network-style
   jitter drawn smoothly (and the ground camera steady on it), shake only in the flyby, slow
@@ -361,7 +369,8 @@ better lighting; whole event from a folder; missiles re-flown as the shooter's g
 v1.0 release workflow and the one-page how-to; v1.1 fixes; v1.2 cinematic mode (9 shots, lens,
 shake, eased slow motion / pause, retake, effects) and remappable keys; v1.2.1 (flyby-only shake,
 smoothed tracks); v1.3 (chase kinds, ghost cameras, mouse stick, crane helpers, steadier flyby
-and ground camera, F9 flight path file). Not yet measured on RvB 6
+and ground camera, F9 flight path file); v1.4 (calm hand-turned orbit as the starting view,
+smooth camera switch, top view in the cinematic mode). Not yet measured on RvB 6
 (no replays here): the new "reproduced" count (was 91 of 119), the ground-object numbers, the
 damage logs, and the cinematic effects' frame rate in a big furball (test: 60 explosions, 40
 burning, 400 trails at once = 9 ms a frame; realistic ~1-2 ms).
@@ -457,3 +466,7 @@ Agreed next steps, in order:
   plane cameras - those are the most important"; helpers for the crane ("great but a little hard
   to use"). Built as v1.3 (see Cinematic mode above). Not verified on their replays: whether 3-4
   are steady now; if not, ask for an F9 flight path file of the shaky aircraft.
+- Then, "take it simple now": no normal view to calmly watch and find shots - Orbit must not
+  turn by itself (only the player turns it) and be the default for following aircraft; a
+  camera smooth / no smooth toggle; top view and the "Tacview-esque" (viewer) camera in the
+  cinematic mode too. v1.4 (the orbit now is the viewer's camera).

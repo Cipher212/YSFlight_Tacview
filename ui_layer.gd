@@ -76,20 +76,20 @@ const VIEW_SWITCHES = [
 const CINEMA_SLIDERS = [
 	["cine_shake", "Flyby shake", 0.0, 3.0, false, "%.2fx"],
 	["cine_slow", "Slow motion", 0.05, 0.5, false, "%.2fx"],
-	["cine_orbit", "Orbit speed", 0.0, 60.0, false, "%d deg/s"],
 	["cine_crane", "Crane move", 1.0, 30.0, false, "%.1f s"],
 	["cine_stick_speed", "Stick speed", 20.0, 240.0, false, "%d deg/s"]]
 const CINEMA_SWITCHES = [
+	["cine_smooth", "Smooth camera (B): the cameras ease after the aircraft; off: they stick to it exactly"],
 	["cine_stick", "Mouse steers like a stick (F7): the further from the centre, the faster it turns (F8 or middle button: centre)"],
 	["cine_stick_invert", "Stick: pull back (mouse down) to look up, like flying"],
 	["cine_guides", "Guides (G): the crane path and points while paused, shot names; off for clean recordings"]]
 const CINEMA_HELP = "Cinematic mode (M): everything but the world hidden, for recording with OBS. " + \
 	"Keys 0-9 pick the shot: 1 Chase (again: Chase plane, Trailing, Delayed, Outside), 0 Ghost " + \
 	"camera fixed on the aircraft (again: the next spot), 2 Wingman, 3 Flyby, 4 Ground camera, " + \
-	"5 Orbit, 6 Weapon, 7 Lock-on, 8 Crane (points set with K; U, Delete, [ ], V: helpers, shown " + \
+	"5 Orbit (the calm one it starts in: only you turn it), 6 Weapon, 7 Lock-on, 8 Crane (points set with K; U, Delete, [ ], V: helpers, shown " + \
 	"while paused), 9 Drone. Wheel: closer / further, Ctrl+wheel: zoom, Alt+wheel: background blur, " + \
 	"right-drag or the stick (F7): turn, hold Z: snap zoom, hold X: slow motion, Backspace: retake, " + \
-	"G: guides, F1: all its keys, M or Esc: back."
+	"B: smooth camera on / off, T: top view, G: guides, F1: all its keys, M or Esc: back."
 const TRAIL_HELP = "Weapon trails, in the shooter's team colour: solid line = air-to-air missile, " + \
 	"dashed = air-to-ground missile, dots = bomb (grey dots: a dropped fuel tank), short streak = " + \
 	"rocket, short thin lines = gun rounds."
