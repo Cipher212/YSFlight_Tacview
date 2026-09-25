@@ -1,5 +1,10 @@
 # YSFlight RvB replay viewer ("poor man's Tacview") - notes for Claude
 
+**Also read `docs/HANDOVER.md` at the start of every session** until its work is done: it hands
+the project over from the cloud sessions (what to measure first on the real replays, a code
+review with a verdict on each point, the order of work). When all of it is done, tell the user,
+remove this paragraph and delete that file.
+
 The user organises YSFlight Red vs Blue (RvB) events and is not a developer: explain in plain
 words, give step-by-step guides, keep the app a plain utility (function over looks; no glow,
 filler labels or constant animation). Scoring stays **man in the loop**: the app gathers every
