@@ -1238,6 +1238,8 @@ func _fill_files(data: Dictionary) -> void:
 	var sources = data.get("sources", [])
 	if sources.is_empty():
 		text = "Older event file: no details about the replay files."
+	else:
+		text = _replay_summary(sources, data.get("entities", {})) + "\nFILES\n"
 	for s in sources:
 		if s.get("included", false):
 			text += "[color=#7fdc8a]USED[/color]  %s\n   recorded by %s, %s-%s, delay %.2f s, %d sorties taken\n   %s\n" % [
@@ -1248,6 +1250,82 @@ func _fill_files(data: Dictionary) -> void:
 				s["file"], s.get("recorded_by", "?"), s.get("reason", "")]
 	text += "\nReview marks are saved in:\n   %s" % review.path
 	files_text.text = text
+
+# Who sent replays (the files used), how much of the event each player's files cover together
+# (a disconnect starts a new file, so one player can send several), and who flew without sending
+# one. Stretches shorter than REPLAY_GAP seconds don't count as missing.
+const REPLAY_GAP = 30.0
+func _replay_summary(sources: Array, entities: Dictionary) -> String:
+	var start := INF
+	var end := -INF
+	var by := {}                                 # player -> [[from, to], ...] (event seconds)
+	for s in sources:
+		if not s.get("included", false):
+			continue
+		var f := float(s.get("from", 0.0))
+		var t := float(s.get("to", 0.0))
+		start = minf(start, f)
+		end = maxf(end, t)
+		var who := str(s.get("recorded_by")) if s.get("recorded_by") != null else ""
+		if who == "":
+			who = "Unknown player (%s)" % s.get("file", "?")
+		if not by.has(who):
+			by[who] = []
+		by[who].append([f, t])
+	if by.is_empty():
+		return ""
+	var whole := []
+	var part := []
+	var names := by.keys()
+	names.sort_custom(func(x, y): return x.naturalnocasecmp_to(y) < 0)
+	for who in names:
+		var spans: Array = by[who]
+		spans.sort_custom(func(x, y): return x[0] < y[0])
+		var merged := []
+		for sp in spans:
+			if merged.size() > 0 and sp[0] <= merged[-1][1] + REPLAY_GAP:
+				merged[-1][1] = maxf(merged[-1][1], sp[1])
+			else:
+				merged.append([sp[0], sp[1]])
+		var missing := []
+		var covered := 0.0
+		for m in merged:
+			covered += m[1] - m[0]
+		if merged[0][0] - start >= REPLAY_GAP:
+			missing.append("starts at %s" % Fmt.clock(merged[0][0]))
+		for i in range(1, merged.size()):
+			missing.append("missing %s-%s" % [Fmt.clock(merged[i - 1][1]), Fmt.clock(merged[i][0])])
+		if end - merged[-1][1] >= REPLAY_GAP:
+			missing.append("ends at %s" % Fmt.clock(merged[-1][1]))
+		var line := "   %s  (%d file%s" % [_bb(who), spans.size(), "" if spans.size() == 1 else "s"]
+		if missing.is_empty():
+			whole.append(line + ")")
+		else:
+			part.append(line + ", covers %s of %s): %s" % [Fmt.clock(covered), Fmt.clock(end - start),
+				", ".join(missing)])
+	var text := "REPLAYS SENT BY %d PLAYER%s (event %s-%s)\n" % [by.size(), "" if by.size() == 1 else "S",
+		Fmt.clock(start), Fmt.clock(end)]
+	if not whole.is_empty():
+		text += "[color=#7fdc8a]Whole event[/color]\n%s\n" % "\n".join(whole)
+	if not part.is_empty():
+		text += "[color=#e0b060]Part of the event only[/color]\n%s\n" % "\n".join(part)
+	var flew := {}
+	for id in entities:
+		var pilot := str(entities[id].get("player", ""))
+		if pilot != "" and not by.has(pilot):
+			flew[pilot] = true
+	if not flew.is_empty():
+		var none := flew.keys()
+		none.sort_custom(func(x, y): return x.naturalnocasecmp_to(y) < 0)
+		var shown := []
+		for n in none:
+			shown.append(_bb(n))
+		text += "[color=#e08a7a]Flew, but no replay used[/color]\n   %s\n" % ", ".join(shown)
+	return text
+
+# A name as plain text in a BBCode label (player names start with [BLUE], [RED] ...).
+static func _bb(text: String) -> String:
+	return text.replace("[", "[lb]")
 
 func _draw_ticks() -> void:
 	var w := ticks.size.x

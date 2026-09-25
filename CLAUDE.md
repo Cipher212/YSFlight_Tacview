@@ -147,6 +147,10 @@ shadows), `dnm_model.gd` (YSFlight `.dnm`/`.srf` models, cached in
   its own crash), gun rounds / rockets within 40 m, over-G (>= 11 G), another aircraft within
   30 m, the ground within 15 m. Health on the name tags: "Health 35/40" (against the health at
   the start of the track), "Going down" in states 4/5 (the game then sets health to 1).
+- Files tab, top (user request): "REPLAYS SENT BY n PLAYERS": per recorder of the used files,
+  their spans merged (a disconnect starts a new file; gaps < 30 s ignored) -> "Whole event" or
+  "Part of the event only" with "starts at", "missing a-b", "ends at"; then pilots who flew but
+  have no used replay (`ui_layer._replay_summary`).
 - Crash finder (user: without cluttering the UI): only evidence lines in the details of crashed /
   collision / unclear endings: the nearest other aircraft (within 20 km, closing speed) and the
   nearest standing ground object (within 5 km).
@@ -370,7 +374,7 @@ v1.0 release workflow and the one-page how-to; v1.1 fixes; v1.2 cinematic mode (
 shake, eased slow motion / pause, retake, effects) and remappable keys; v1.2.1 (flyby-only shake,
 smoothed tracks); v1.3 (chase kinds, ghost cameras, mouse stick, crane helpers, steadier flyby
 and ground camera, F9 flight path file); v1.4 (calm hand-turned orbit as the starting view,
-smooth camera switch, top view in the cinematic mode). Not yet measured on RvB 6
+smooth camera switch, top view in the cinematic mode); v1.4.1 (who sent replays, in the Files tab). Not yet measured on RvB 6
 (no replays here): the new "reproduced" count (was 91 of 119), the ground-object numbers, the
 damage logs, and the cinematic effects' frame rate in a big furball (test: 60 explosions, 40
 burning, 400 trails at once = 9 ms a frame; realistic ~1-2 ms).

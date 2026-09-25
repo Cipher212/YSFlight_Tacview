@@ -46,7 +46,7 @@ gathers the angles; scorers decide.
    (every aircraft's ending with the likely causes and percentages, the damage log, and for
    crashes the nearest aircraft and ground object; CHECK = worth a scorer's look), Ground (every
    ground target by team and type: destroyed when and by whom; click to look at it), Chat (the
-   replays' text messages; click to go there), Files (which replays were used), View (sizes,
+   replays' text messages; click to go there), Files (who sent replays, whether each player's files cover the whole event, who flew without sending one, and which replays were used), View (sizes,
    ribbon width, how long markers stay, what is drawn: shadows, SAM / AAA range rings, better
    lighting ..., what the weapon trails mean).
 5. **Review:** pick a kill or death, watch it, then Confirm or Reject (press again to undo) and

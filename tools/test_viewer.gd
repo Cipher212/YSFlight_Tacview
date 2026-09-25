@@ -362,6 +362,39 @@ func _init():
 		DirAccess.remove_absolute(dir.path_join(f))
 	DirAccess.remove_absolute(dir)
 
+	print("replays sent:")
+	var ftext: String = ui.files_text.text
+	var n_used := 0
+	for fsrc in main.event_data.get("sources", []):
+		if fsrc.get("included", false):
+			n_used += 1
+	check(ftext.begins_with("REPLAYS SENT BY %d PLAYER" % n_used) and ftext.contains("Whole event")
+		and ftext.contains("[lb]BLUE]Tester"), "Files tab: who sent replays (%d), whole event" % n_used)
+	var recorders := []
+	for fsrc in main.event_data.get("sources", []):
+		if fsrc.get("included", false):
+			recorders.append(fsrc.get("recorded_by"))
+	var lacking := 0
+	for eid in main.event_data["entities"]:
+		if not recorders.has(main.event_data["entities"][eid]["player"]):
+			lacking += 1
+	check(ftext.contains("Flew, but no replay used") == (lacking > 0),
+		"pilots without a replay listed only when some are missing (%d sorties)" % lacking)
+	var summary: String = ui._replay_summary([
+		{"included": true, "recorded_by": "[RED]A", "file": "a1.yfs", "from": 0.0, "to": 100.0},
+		{"included": true, "recorded_by": "[RED]A", "file": "a2.yfs", "from": 160.0, "to": 600.0},
+		{"included": true, "recorded_by": "[BLUE]B", "file": "b.yfs", "from": 200.0, "to": 590.0},
+		{"included": true, "recorded_by": "[BLUE]C", "file": "c1.yfs", "from": 0.0, "to": 300.0},
+		{"included": true, "recorded_by": "[BLUE]C", "file": "c2.yfs", "from": 310.0, "to": 600.0},
+		{"included": false, "recorded_by": "[RED]E", "file": "e.yfs"}],
+		{"1": {"player": "[RED]A"}, "2": {"player": "[RED]D"}, "3": {"player": "[RED]E"}})
+	print(summary)
+	check(summary.contains("[lb]RED]A  (2 files, covers 9:00 of 10:00): missing 1:40-2:40")
+		and summary.contains("[lb]BLUE]B  (1 file, covers 6:30 of 10:00): starts at 3:20")
+		and summary.contains("[lb]BLUE]C  (2 files)\n")
+		and summary.contains("[lb]RED]D, [lb]RED]E"),
+		"two files with a disconnect gap, a late start, a short reconnect (whole), no replay")
+
 	print("cinematic mode:")
 	var cin = main.cinema
 	main.follow(tester_id)
