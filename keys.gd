@@ -36,7 +36,9 @@ const ACTIONS = [
 	["move_down", "Camera down", KEY_Q, "both"],
 	["fullscreen", "Full screen on / off", KEY_F11, "both"],
 	["cinema", "Cinematic mode on / off", KEY_M, "both"],
-	["shot_1", "Shot 1: Chase", KEY_1, "cinema"],
+	["save_track", "Save the followed aircraft's flight path (40 s, to check jitter)", KEY_F9, "both"],
+	["shot_0", "Shot 0: Ghost camera fixed on the aircraft (again: next spot)", KEY_0, "cinema"],
+	["shot_1", "Shot 1: Chase (again: Chase plane, Trailing, Delayed, Outside)", KEY_1, "cinema"],
 	["shot_2", "Shot 2: Wingman", KEY_2, "cinema"],
 	["shot_3", "Shot 3: Flyby", KEY_3, "cinema"],
 	["shot_4", "Shot 4: Ground / deck camera", KEY_4, "cinema"],
@@ -46,6 +48,14 @@ const ACTIONS = [
 	["shot_8", "Shot 8: Crane move", KEY_8, "cinema"],
 	["shot_9", "Shot 9: Free drone", KEY_9, "cinema"],
 	["crane_point", "Crane: add a point here", KEY_K, "cinema"],
+	["crane_undo", "Crane: remove the last point", KEY_U, "cinema"],
+	["crane_clear", "Crane: remove all points", KEY_DELETE, "cinema"],
+	["crane_shorter", "Crane: shorter move", KEY_BRACKETLEFT, "cinema"],
+	["crane_longer", "Crane: longer move", KEY_BRACKETRIGHT, "cinema"],
+	["crane_preset", "Crane: next ready-made move", KEY_V, "cinema"],
+	["guides", "Guides on / off (crane path while paused, shot names)", KEY_G, "cinema"],
+	["stick", "Mouse steers like a stick, on / off (YSFlight's F7 view)", KEY_F7, "cinema"],
+	["stick_center", "Stick back to the centre (also: middle mouse button)", KEY_F8, "cinema"],
 	["snap_zoom", "Snap zoom (hold)", KEY_Z, "cinema"],
 	["slow_motion", "Slow motion (hold)", KEY_X, "cinema"],
 	["retake", "Retake: back to where Play was pressed", KEY_BACKSPACE, "cinema"],
@@ -110,7 +120,9 @@ func key_name(action: String) -> String:
 func short_name(action: String) -> String:
 	var name := key_name(action)
 	return {"Escape": "Esc", "Comma": ",", "Period": ".", "Equal": "=", "Minus": "-",
-		"Backspace": "Bksp", "PageUp": "PgUp", "PageDown": "PgDn"}.get(name, name)
+		"Backspace": "Bksp", "PageUp": "PgUp", "PageDown": "PgDn", "BracketLeft": "[",
+		"BracketRight": "]", "Delete": "Del", "Semicolon": ";", "Apostrophe": "'", "Slash": "/",
+		"Backslash": "\\"}.get(name, name)
 
 # Other actions on the same key that work in a mode this one works in too (they clash: one of
 # them can't be reached there).

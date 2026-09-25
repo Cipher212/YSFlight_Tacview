@@ -110,4 +110,39 @@ func _init():
 		c.set_shot(4)
 		at(152.0)
 		await shot("c14_ground_cam")
+	if only == "" or only.contains("h"):
+		main.follow("1")
+		c.set_shot(2)
+		main.seek(148.0)
+		main.set_playing(true)
+		c.set_shot(1)
+		for n in c.KIND_NAMES.size():
+			if n > 0:
+				c.set_shot(1)
+			await create_timer(1.0).timeout
+			await shot("h_chase_%d_%s" % [n, c.KIND_NAMES[c.chase_kind].replace(" ", "_")])
+		c.set_shot(0)
+		for n in c.MOUNT_NAMES.size():
+			if n > 0:
+				c.set_shot(0)
+			await create_timer(0.5).timeout
+			await shot("h_ghost_%d_%s" % [n, c.MOUNT_NAMES[c.ghost_kind]])
+		main.set_playing(false)
+	if only == "" or only.contains("i"):
+		main.follow("1")
+		c.set_shot(1)
+		at(150.0)
+		await process_frame
+		await process_frame
+		c._hint_clock = 0.01
+		c.key("crane_preset", false)
+		c.set_shot(9)
+		c._start_drone(Transform3D(Basis.looking_at(Vector3(-1, -0.3, -1).normalized(), Vector3.UP),
+			main.active_aircraft["1"].position + Vector3(120, 50, 120)))
+		c._hint_clock = 0.01
+		await shot("i_crane_guides")
+	if only == "" or only.contains("j"):
+		c.key("help", false)
+		await shot("j_key_list")
+		c.key("help", false)
 	quit()

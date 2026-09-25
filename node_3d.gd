@@ -35,6 +35,10 @@ const VECTOR_SECONDS = 1.0       # a flight path vector reaches where the aircra
 # 11.8 G turn 0.4 m inwards.
 const SMOOTH_SIGMA = 0.2
 const SMOOTH_SIGMA_ATT = 0.1
+# The cameras that stand still and turn to follow an aircraft (flyby, ground camera) aim at its
+# track smoothed more (`track_aim`): what jitter is left then moves the aircraft a little in the
+# picture instead of shaking the whole picture.
+const AIM_SIGMA = 0.45
 # Top view (T): the map from straight above, north up, drawn without perspective (orthographic)
 const TOP_HEIGHT = 60000.0       # metres: the top view's camera height (above everything)
 const TOP_SIZE_MIN = 300.0       # metres from the bottom to the top of the screen, zoomed in fully
@@ -77,7 +81,8 @@ const VIEW_DEFAULTS = {"aircraft_scale": 1.0, "weapon_scale": 1.0, "text_scale":
 	"trail_seconds": 30.0, "ribbon_width": 1.0, "marker_seconds": 30.0, "ribbons": true,
 	"vectors": true, "tags": true, "tethers": true, "markers": true, "ground": true, "clouds": true,
 	"blocky": false, "smoke": true, "shadows": true, "ranges": false, "lighting": true,
-	"cine_shake": 1.0, "cine_slow": 0.25, "cine_orbit": 12.0, "cine_crane": 5.0}
+	"cine_shake": 1.0, "cine_slow": 0.25, "cine_orbit": 12.0, "cine_crane": 5.0,
+	"cine_stick": false, "cine_stick_speed": 90.0, "cine_stick_invert": false, "cine_guides": true}
 
 var camera: Camera3D
 var cam_rot_x: float = -0.5
@@ -94,6 +99,7 @@ var t_min: float = 0.0
 var t_max: float = 0.0
 
 var event_data = null
+var event_path := ""             # the loaded event's file
 var event_root: Node3D           # everything that belongs to the loaded event
 var active_aircraft = {} # marker nodes: position only, label rides on these
 var aircraft_models = {} # model inside each marker: gets the attitude
@@ -473,6 +479,7 @@ func _event_read(path: String, data, error_text: String, map_data, extra: Dictio
 		show_map(null)               # different field and no map file for it: plain ground
 	clear_event()
 	event_data = data
+	event_path = path
 	event_root = Node3D.new()
 	add_child(event_root)
 	spawn_aircraft(data)
@@ -949,6 +956,37 @@ static func _filtered(frames: Array, i: int, t: float) -> Array:
 		basis = Basis.looking_at(nose.normalized(), top.normalized())
 	return [pos, vel, basis]
 
+# Only position and velocity, smoothed over `sigma` seconds (the same fit as `_filtered`).
+static func _filtered_pos(frames: Array, i: int, t: float, sigma: float) -> Array:
+	var n := frames.size()
+	var reach := 3.0 * sigma
+	var a := i
+	while a > 0 and float(frames[a - 1]["t"]) >= t - reach:
+		a -= 1
+	var b := i
+	while b < n - 1 and float(frames[b + 1]["t"]) <= t + reach:
+		b += 1
+	var k_pos := 1.0 / (2.0 * sigma * sigma)
+	var s0 := 0.0
+	var s1 := 0.0
+	var s2 := 0.0
+	var sp := Vector3.ZERO
+	var sdp := Vector3.ZERO
+	for k in range(a, b + 1):
+		var f: Dictionary = frames[k]
+		var d: float = float(f["t"]) - t
+		var w := exp(-d * d * k_pos)
+		var p := Vector3(f["x"], f["y"], -f["z"])
+		s0 += w
+		s1 += w * d
+		s2 += w * d * d
+		sp += p * w
+		sdp += p * (w * d)
+	var det := s0 * s2 - s1 * s1
+	if det > 1e-9 * s0 * s0:
+		return [(sp * s2 - sdp * s1) / det, (sdp * s0 - sp * s1) / det]
+	return [sp / s0, Vector3.ZERO]
+
 # An aircraft's smoothed position / velocity (m/s) at any time t (the cinematic mode's cameras).
 func track_pos(id: String, t: float) -> Vector3:
 	var frames: Array = telemetry_data[id]
@@ -957,6 +995,16 @@ func track_pos(id: String, t: float) -> Vector3:
 func track_vel(id: String, t: float) -> Vector3:
 	var frames: Array = telemetry_data[id]
 	return _filtered(frames, frame_index_at(frames, t), t)[1]
+
+# [position, velocity, attitude] as drawn in the cinematic mode, at any time t.
+func track_state(id: String, t: float) -> Array:
+	var frames: Array = telemetry_data[id]
+	return _filtered(frames, frame_index_at(frames, t), t)
+
+# Where the still cameras aim: the track smoothed more (AIM_SIGMA).
+func track_aim(id: String, t: float) -> Vector3:
+	var frames: Array = telemetry_data[id]
+	return _filtered_pos(frames, frame_index_at(frames, t), t, AIM_SIGMA)[0]
 
 # Velocity (m/s) around track sample idx: the move from two samples before it to three after
 # (about 0.25 s at 20 samples a second), over the time between them.
@@ -1165,6 +1213,40 @@ func set_cinema(on: bool) -> void:
 	ui.visible = not on
 	_apply_view()
 
+# The followed aircraft's samples 20 s either side of now, as the event has them (not smoothed),
+# into a small text file next to the event: for checking how much a track jitters (a replay records
+# aircraft seen through the network unevenly). Not a JSON name, so the event lists ignore it.
+func save_track() -> void:
+	if event_data == null or tracked_id == "" or event_path == "":
+		_tell("Follow an aircraft first (Tab), then save its flight path")
+		return
+	var e: Dictionary = event_data["entities"][tracked_id]
+	var rows := []
+	for f in telemetry_data[tracked_id]:
+		if absf(float(f["t"]) - replay_time) <= 20.0:
+			var ctrl: Array = f.get("ctrl", [])
+			rows.append([f["t"], f["x"], f["y"], f["z"], f["yaw"], f["pitch"], f["roll"], f.get("g", 0.0),
+				int(ctrl[0]) if ctrl.size() > 0 else 0])
+	var stem := event_path.get_file().trim_suffix(".gz").trim_suffix(".json")
+	var name := ("%s track %s %s.txt" % [stem, e["player"], Fmt.clock(replay_time).replace(":", "-")]).validate_filename()
+	var path := event_path.get_base_dir().path_join(name)
+	var out := FileAccess.open(path, FileAccess.WRITE)
+	if out == null:
+		_tell("Could not save the flight path to " + path)
+		return
+	out.store_string(JSON.stringify({"format": 1, "event": event_path.get_file(), "pilot": e["player"],
+		"aircraft": e["aircraft"], "source": e.get("source", {}), "t": replay_time,
+		"columns": ["t", "x", "y", "z", "yaw", "pitch", "roll", "g", "state"], "samples": rows}))
+	out.close()
+	_tell("Saved %s's flight path around %s: %s" % [e["player"], Fmt.clock(replay_time), path])
+
+# A short message: on screen in the cinematic mode, in the top bar otherwise.
+func _tell(text: String) -> void:
+	if cinema.on:
+		cinema.show_hint(text, 5.0)
+	else:
+		ui.set_status(text)
+
 func toggle_fullscreen() -> void:
 	var w := get_window()
 	if w.mode == Window.MODE_FULLSCREEN or w.mode == Window.MODE_EXCLUSIVE_FULLSCREEN:
@@ -1294,6 +1376,8 @@ func _key(event: InputEventKey) -> bool:
 			set_cinema(not cinema.on)
 		"fullscreen":
 			toggle_fullscreen()
+		"save_track":
+			save_track()
 		"play":
 			set_playing(not playing)
 		"rewind":

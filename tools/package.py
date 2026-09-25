@@ -92,14 +92,24 @@ decide and fill in the scoring sheet by hand, with the viewer's times (seconds s
    M (or the Cinematic button) hides everything but the world, for recording with OBS; M or
    Esc brings the panels back, F11 is full screen, F1 lists its keys. Missiles smoke, things
    explode and aircraft burn as in the game, only better looking.
-   Shots: 1 Chase, 2 Wingman, 3 Flyby (waits beside the aircraft's path), 4 Ground camera
-   (stays where the camera is and zooms like a long lens: fly there with 9 first), 5 Orbit,
-   6 Weapon (rides the next missile or bomb), 7 Lock-on (over the shoulder, target ahead; R:
-   next target), 8 Crane (glides through points set with K), 9 Drone (WASD, E/Q, Shift).
+   Shots: 1 Chase (press 1 again: Chase plane, Trailing, Delayed, Outside), 2 Wingman,
+   3 Flyby (waits beside the aircraft's path), 4 Ground camera (stays where the camera is and
+   zooms like a long lens: fly there with 9 first), 5 Orbit, 6 Weapon (rides the next missile
+   or bomb), 7 Lock-on (over the shoulder, target ahead; R: next target), 8 Crane (glides
+   through points set with K), 9 Drone (WASD, E/Q, Shift), 0 Ghost camera fixed on the aircraft
+   (press 0 again: behind, wing, front, top, belly, tail, nose).
    Tab picks the aircraft. Wheel: closer / further, Ctrl+wheel: zoom, Alt+wheel: background
    blur, right-drag: angle, hold Z: snap zoom, hold X: slow motion, Space: pause (eases to a
-   stop), Backspace: retake from where you pressed Play. View tab: flyby shake, slow motion speed,
-   orbit speed, crane move time.
+   stop), Backspace: retake from where you pressed Play.
+   F7: the hidden mouse steers like a flight stick (a little off centre = slow, far = fast);
+   F8 or the middle button: back to the centre.
+   Crane helpers (while paused): the path and its numbered points show on screen with a line of
+   keys; U removes the last point, Delete all of them, [ ] shorter / longer move, V ready-made
+   moves round the aircraft, G hides the helpers (and the shot names: press it before
+   recording).
+   View tab: flyby shake, slow motion speed, orbit speed, crane move time, stick speed.
+   F9 (any time): saves the followed aircraft's flight path to a small .txt next to the event,
+   to send if an aircraft looks shaky.
 """
 PYTHON_NOTE_BUNDLED = "The Python it needs is included (the python folder)."
 PYTHON_NOTE_PATH = ("This needs Python 3 installed (python.org; tick \"Add python.exe to PATH\"). "

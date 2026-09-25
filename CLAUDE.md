@@ -61,8 +61,8 @@ for better lighting; `ground_at(x, z)` = height and slope of the ground under a 
 shadows), `dnm_model.gd` (YSFlight `.dnm`/`.srf` models, cached in
 `user://model_cache`, parsed on WorkerThreadPool), `event_builder.gd`, `fmt.gd`, `ys_air.gd`,
 `paths.gd` (where the data folders are), `keys.gd` (every shortcut by name, the user's own keys),
-`cinema.gd` (cinematic mode: shots, lens, shake, eased time) and `cinema_fx.gd` (its smoke,
-explosions, burning aircraft). Settings (last event, panel, `view_*`, `key_*`) live in
+`cinema.gd` (cinematic mode: shots, lens, shake, eased time, the mouse stick), `cinema_fx.gd`
+(its smoke, explosions, burning aircraft) and `cinema_guides.gd` (the crane path on screen). Settings (last event, panel, `view_*`, `key_*`) live in
 `user://settings.cfg`: the user's own; tests must not write it.
 
 ## Conventions and facts (verified; don't re-litigate)
@@ -189,10 +189,31 @@ explosions, burning aircraft). Settings (last event, panel, `view_*`, `key_*`) l
   network by metres at each update (YSFlight's client snaps them to a blend of the last two
   updates by the ratio of local to remote time, FsAirplaneProperty::NetworkDecode, and flies them
   on in between); the test fight's tracks are clean, the user's weren't.
-  Shots 1-9 as in `cinema.gd`'s header (chase with H level/roll, wingman, flyby placed at the
-  track 2.5 s ahead, ground cam parked where the camera was with an auto long lens and riding a
-  moving ground object within 300 m, orbit, weapon cam, lock-on with R, crane through K points
-  - relative to the aircraft's heading if set while following it - and drone). Lens: wheel,
+  Shots 0-9 as in `cinema.gd`'s header (chase with H level/roll - 1 again cycles the chase
+  kinds: Chase plane (a follower with a spring, 0.85 x the lead's acceleration fed forward,
+  at most 6 G, banking 60 % towards its lift), Trailing (on the track 2.5 x the wheel's metres
+  back along the path), Delayed (YSFlight's FSOUTSIDEPLAYER3: the attitude 0.8 s before),
+  Outside (YSFlight's F7, FSOUTSIDEPLAYER2: a world-fixed direction); 0 = ghost cameras fixed
+  on the aircraft, 0 again cycles the mount (behind, wing, front, top, belly, tail, nose; placed
+  from the model's box, `_subject_box`); wingman, flyby placed at the track 2.5 s ahead, ground
+  cam parked where the camera was with an auto long lens and riding a moving ground object only
+  within its hull + 25 m (its pose smoothed over ~1 s), orbit, weapon cam, lock-on with R, crane
+  through K points - relative to the aircraft's heading if set while following it - and drone).
+  The still cameras (flyby, ground) aim at `node_3d.track_aim` (the track smoothed more, sigma
+  0.45 s) with a pan-tilt head (yaw + pitch, no roll): the user still saw "earthquakes" in 3-4
+  after v1.2.1. Playing backwards once re-placed the flyby every frame (fixed: `_spot_dir`).
+  Stick (user request, "like the F7/F8 view of YSFlight 2012": the old code, commented out in
+  fssimulation.cpp, turned relViewAtt by (pi/2) x stick x dt): F7 or View "Mouse as a stick":
+  the mouse is captured and its movement is a stick deflection (300 px = full, 6 % dead zone,
+  curve power 1.6, View "Stick speed" deg/s at full, eased in and out, rates x fov / 55),
+  steering what right-drag steers; F8 / middle button recentres. Crane helpers (user: "great but
+  a little hard to use"): while paused (not during a glide) `cinema_guides.gd` draws the path
+  dashed, numbered points and look lines through everything, with a HUD line of keys; U undo,
+  Delete clear, [ ] move time, V ready-made moves (sweep, rise, push in, pull out, circle; round
+  the followed aircraft at the current camera distance), G guides on / off (also View). F9
+  (`save_track`, also outside the mode): the followed aircraft's samples +-20 s as JSON in
+  `<event> track <pilot> <m-ss>.txt` next to the event, for the user to send if jitter is left
+  (the test fight has none; the user's replays do). Lens: wheel,
   Ctrl+wheel FOV, Alt+wheel DOF (CameraAttributesPractical focused on the subject), hold Z snap
   zoom 3x, hold X slow motion (View "Slow motion", eased), Space eases to a stop, Backspace
   retake (`note_play` when Play starts), F11 full screen, F1 key list. Follow cameras ease on the
@@ -279,10 +300,12 @@ private: other scorers need to be collaborators to download, or the user shares 
   markers, ribbons, lists, jumps, the review file, ground objects, shadows, the Ground tab,
   health tags, damage log, crash finder, rings, top view, lighting and the folder pick;
   `tools/test_shots.gd` takes screenshots under `xvfb-run`, `tools/test_cinema_shots.gd` the
-  cinematic mode's (ONLY=a..g picks parts); test_viewer also checks the cinematic mode (hiding,
-  shot distances, lock-on, weapon cam, effects, flyby, ground cam, snap zoom, a track with
-  network-style jitter drawn smoothly, shake only in the flyby, slow motion, pause, retake, crane,
-  rebinding a key in the Keys window). The
+  cinematic mode's (ONLY=a..i picks parts; h = chase kinds and ghost mounts, i = crane guides);
+  test_viewer also checks the cinematic mode (hiding, shot distances, lock-on, weapon cam,
+  effects, flyby (also played backwards), ground cam, snap zoom, a track with network-style
+  jitter drawn smoothly (and the ground camera steady on it), shake only in the flyby, slow
+  motion, pause, retake, crane, the chase kinds, ghost mounts, the stick, crane presets / undo /
+  guides, F9, rebinding a key in the Keys window). The
   user's renderer (Forward+) runs here on lavapipe: `apt-get install mesa-vulkan-drivers`, then
   `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json xvfb-run -a -s "-screen 0 1920x1080x24"
   godot --path . --rendering-driver vulkan --rendering-method forward_plus --resolution
@@ -322,7 +345,7 @@ private: other scorers need to be collaborators to download, or the user shares 
   (no soft particles against it).
 - YSFlight has no over-G breakup in its own code (only blackout); RvB's G-limiter is a server rule.
 
-## Status (2026-09-24) and next steps
+## Status (2026-09-25) and next steps
 
 Done: merged events; playback UI (rewind, fast forward, frame steps, speeds, seconds in the
 clock); start menu with `.fld` choice; Luavi map 1:1 with terrain; game models for aircraft
@@ -337,7 +360,8 @@ Ground tab; health on name tags; damage log; crash finder; SAM / AAA range rings
 better lighting; whole event from a folder; missiles re-flown as the shooter's game saw them;
 v1.0 release workflow and the one-page how-to; v1.1 fixes; v1.2 cinematic mode (9 shots, lens,
 shake, eased slow motion / pause, retake, effects) and remappable keys; v1.2.1 (flyby-only shake,
-smoothed tracks). Not yet measured on RvB 6
+smoothed tracks); v1.3 (chase kinds, ghost cameras, mouse stick, crane helpers, steadier flyby
+and ground camera, F9 flight path file). Not yet measured on RvB 6
 (no replays here): the new "reproduced" count (was 91 of 119), the ground-object numbers, the
 damage logs, and the cinematic effects' frame rate in a big furball (test: 60 explosions, 40
 burning, 400 trails at once = 9 ms a frame; realistic ~1-2 ms).
@@ -423,3 +447,13 @@ Agreed next steps, in order:
   flyby ("you can see 2 planes where there is one", worst in the ground camera zoomed in); they
   suggested shake only in the flyby or none. v1.2.1: shake only in the flyby, tracks smoothed in
   the cinematic mode. Still to hear: the shots, effects and frame rate (their PC + OBS).
+
+## From the sixth chat (cloud, 2026-09-25)
+
+- The user tested v1.2.1: "pretty good", but 3 (flyby) and 4 (ground camera) still had
+  "earthquakes", "not just from the shake effect". Asked for: panning by the hidden cursor's
+  distance from the centre with smoothing, faster the further out, like a flight stick (the F7 /
+  F8 view of YSFlight 2012, later removed by Soji); "a few more types of ghostplane / chase
+  plane cameras - those are the most important"; helpers for the crane ("great but a little hard
+  to use"). Built as v1.3 (see Cinematic mode above). Not verified on their replays: whether 3-4
+  are steady now; if not, ask for an F9 flight path file of the shaky aircraft.

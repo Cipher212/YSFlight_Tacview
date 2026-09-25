@@ -386,6 +386,7 @@ func _init():
 	check(main.keys.action_of(KEY_K, true) == "crane_point" and main.keys.action_of(KEY_K, false) == "pause",
 		"K: a crane point in the cinematic mode, pause outside it")
 	var dists := {}
+	cin.set_shot(2)                    # (1 while in the chase picks the next kind of chase)
 	for n in [1, 2, 5, 7]:
 		cin.set_shot(n)
 		for k in 6:
@@ -487,6 +488,148 @@ func _init():
 		most = maxf(most, rad_to_deg(main.camera.global_transform.basis.z.angle_to(cin.base.basis.z)))
 	check(most > 0.05, "the flyby shakes as the aircraft rushes past (up to %.2f deg)" % most)
 	main.set_playing(false)
+	# playing backwards the flyby camera stays put (it was set up afresh every frame: an earthquake)
+	main.seek(160.0)
+	cin.set_shot(3)
+	main.set_playing(true)
+	await create_timer(0.3).timeout
+	main.rewind()
+	var spot_was: Vector3 = cin._spot
+	var moves := 0
+	var t_back: float = main.replay_time
+	while main.replay_time > t_back - 2.0:
+		await process_frame
+		if not cin._spot.is_equal_approx(spot_was):
+			moves += 1
+			spot_was = cin._spot
+	check(moves <= 1, "playing backwards: the flyby camera set up again %d time(s) in 2 s (once at most)" % moves)
+	main.set_playing(false)
+	main.play_direction = 1
+	# the still cameras aim at a track smoothed more: Bandit3's jittery track, seen from the ground
+	main.follow(bandit3)
+	main.seek(172.0)
+	cin.rate = 0.0
+	await process_frame
+	await process_frame
+	var b3_pos: Vector3 = main.active_aircraft[bandit3].position
+	cin.set_shot(9)
+	cin._start_drone(Transform3D(Basis.IDENTITY, b3_pos + Vector3(600.0, -150.0, 300.0)))
+	await process_frame
+	await process_frame
+	cin.set_shot(4)
+	var looks := []
+	var drawn_dirs := []
+	for k in 90:
+		main.seek(172.0 + k / 60.0)
+		await process_frame
+		await process_frame
+		looks.append(-main.camera.global_transform.basis.z)
+		drawn_dirs.append((main._pos_at(b3, 172.0 + k / 60.0) - main.camera.global_position).normalized())
+	var worst_look := 0.0
+	var worst_drawn2 := 0.0
+	for k in range(1, 89):
+		worst_look = maxf(worst_look, rad_to_deg((looks[k + 1] - looks[k] * 2.0 + looks[k - 1]).length()))
+		worst_drawn2 = maxf(worst_drawn2, rad_to_deg((drawn_dirs[k + 1] - drawn_dirs[k] * 2.0 + drawn_dirs[k - 1]).length()))
+	check(worst_look < worst_drawn2 / 20.0,
+		"ground camera on a jittery track: the picture turns %.4f deg a frame (aiming at the raw track: %.3f deg)" % [worst_look, worst_drawn2])
+	# the chase family (1 again: the next kind)
+	main.follow(tester_id)
+	main.seek(150.0)
+	main.set_playing(true)
+	cin.set_shot(2)
+	cin.set_shot(1)
+	var kinds := {}
+	for n in cin.KIND_NAMES.size():
+		if n > 0:
+			cin.set_shot(1)
+		await create_timer(0.5).timeout
+		kinds[cin.KIND_NAMES[cin.chase_kind]] = main.camera.global_position.distance_to(main.active_aircraft[tester_id].position)
+	print("    ", kinds)
+	check(kinds.size() == 5 and absf(kinds["Chase"] - 26.0) < 4.0 and kinds["Chase plane"] > 15.0 and kinds["Chase plane"] < 80.0
+		and kinds["Trailing"] > 50.0 and kinds["Trailing"] < 200.0 and absf(kinds["Delayed"] - 26.0) < 2.0
+		and absf(kinds["Outside"] - 26.0) < 2.0, "1 again: chase, chase plane, trailing, delayed, outside")
+	# the ghost cameras (0): fixed on the aircraft, turning with it
+	cin.set_shot(0)
+	var rigid := true
+	var near_all := true
+	for n in cin.MOUNT_NAMES.size():
+		if n > 0:
+			cin.set_shot(0)
+		await create_timer(0.3).timeout
+		var att: Basis = main.aircraft_attitude[tester_id]
+		var p0: Vector3 = att.inverse() * (main.camera.global_position - main.active_aircraft[tester_id].position)
+		await create_timer(0.4).timeout
+		att = main.aircraft_attitude[tester_id]
+		var p1: Vector3 = att.inverse() * (main.camera.global_position - main.active_aircraft[tester_id].position)
+		rigid = rigid and p0.distance_to(p1) < 1.5
+		near_all = near_all and p1.length() < 40.0
+	check(rigid and near_all and cin.ghost_kind == cin.MOUNT_NAMES.size() - 1,
+		"0 and again: %d ghost cameras, each fixed on the aircraft" % cin.MOUNT_NAMES.size())
+	# the stick: the hidden mouse's distance from the centre sets how fast the camera turns
+	cin.set_shot(9)
+	main.set_playing(false)
+	cin.rate = 0.0
+	main._on_view_changed("cine_stick", true)
+	var push := InputEventMouseMotion.new()
+	push.relative = Vector2(60.0, 0.0)
+	cin.mouse(push)
+	var yaw_a: float = cin._drone_yaw_to
+	await create_timer(0.6).timeout
+	var slow_turn: float = yaw_a - cin._drone_yaw_to
+	push.relative = Vector2(240.0, 0.0)
+	cin.mouse(push)
+	yaw_a = cin._drone_yaw_to
+	await create_timer(0.6).timeout
+	var fast_turn: float = yaw_a - cin._drone_yaw_to
+	check(slow_turn > 0.0 and fast_turn > slow_turn * 3.0,
+		"stick right: the drone turns right, faster further out (%.2f then %.2f rad in 0.6 s)" % [slow_turn, fast_turn])
+	var middle := InputEventMouseButton.new()
+	middle.button_index = MOUSE_BUTTON_MIDDLE
+	middle.pressed = true
+	cin.mouse(middle)
+	await create_timer(0.8).timeout
+	yaw_a = cin._drone_yaw_to
+	await create_timer(0.3).timeout
+	check(cin._stick == Vector2.ZERO and absf(cin._drone_yaw_to - yaw_a) < 0.01, "middle button: the stick back to the centre, turning stops")
+	main._on_view_changed("cine_stick", false)
+	# crane helpers: ready-made moves, remove the last / all points, a longer move, guides while paused
+	main.follow(tester_id)
+	main.seek(150.0)
+	cin.set_shot(1)
+	await process_frame
+	await process_frame
+	cin.key("crane_preset", false)
+	var sweep_n: int = cin._crane.size()
+	cin.key("crane_preset", false)
+	check(sweep_n == 3 and cin._crane.size() == 3 and cin.CRANE_PRESETS[cin._preset] == "Rise", "V: ready-made moves (Sweep, then Rise)")
+	cin.key("crane_undo", false)
+	var crane_was: float = main.view["cine_crane"]
+	cin.key("crane_longer", false)
+	await process_frame
+	await process_frame
+	check(cin._crane.size() == 2 and is_equal_approx(main.view["cine_crane"], crane_was + 0.5), "U: remove the last point; ]: a longer move")
+	check(cin.guides.visible and cin._hud.text.contains("CRANE") and cin.guides.labels[1].visible, "paused: the path, its numbered points and the keys on screen")
+	main.set_playing(true)
+	await create_timer(0.3).timeout
+	check(not cin.guides.visible and cin._hud.text == "", "playing: no guides (a clean recording)")
+	cin.key("crane_clear", false)
+	cin.key("crane_shorter", false)
+	check(cin._crane.is_empty(), "Delete: all points removed")
+	main.set_playing(false)
+	# saving a flight path to check its jitter
+	main.follow(tester_id)
+	main.seek(100.0)
+	main.save_track()
+	var saved := ""
+	for f in DirAccess.get_files_at(event.get_base_dir()):
+		if f.contains(" track ") and f.ends_with(".txt"):
+			saved = event.get_base_dir().path_join(f)
+	var track_json := JSON.new()
+	var parsed_ok := saved != "" and track_json.parse(FileAccess.get_file_as_string(saved)) == OK
+	check(parsed_ok and track_json.data["samples"].size() > 500 and track_json.data["pilot"] == "[BLUE]Tester",
+		"F9: the flight path around now saved (%s)" % saved.get_file())
+	if saved != "":
+		DirAccess.remove_absolute(saved)
 	# slow motion, pause and retake
 	main.seek(100.0)
 	main.set_playing(true)
