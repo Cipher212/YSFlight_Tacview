@@ -479,3 +479,21 @@ Agreed next steps, in order:
   turn by itself (only the player turns it) and be the default for following aircraft; a
   camera smooth / no smooth toggle; top view and the "Tacview-esque" (viewer) camera in the
   cinematic mode too. v1.4 (the orbit now is the viewer's camera).
+
+- Future ideas discussed (not started; the user decides the order): built-in recorder that
+  renders offline at a fixed 60 fps (Godot movie maker; ffmpeg to .mp4) so a weak laptop needn't
+  run OBS at 2K; open any .fld on the spot (pick it and its scenery files while an event is open);
+  better event building by statistics (clock fit over all shared moments, lag per replay over
+  time, replays weighted by how often they agree); an event summary tab (per team / pilot:
+  sorties, losses by cause, kills by weapon, ground targets; the app's reading only, scorers
+  decide); kill cam (auto-play each kill / death / crash in short cuts: lock-on, weapon cam,
+  impact in slow motion, aftermath; next / previous, loop); also a flight data strip, saved camera
+  moves, a performance mode for weak PCs, sharing one event file among scorers. Suggested order:
+  kill cam and summary, recorder, any .fld, statistics.
+- Learning from past events (user: 6 RvB events so far): a simple model (logistic regression /
+  small trees, not deep learning) could tune the fates' percentages from the scorers' decisions;
+  it needs the replays AND the sheets matched line by line (sheet times are rough); train on 5,
+  test on the 6th, use only if it beats the hand rules; the sheets stay on the user's PC. Open
+  question to the user: are events 1-5's replays and sheets available and detailed enough?
+- Files tab summary of who sent replays: v1.4.1 (see above). Then the user moved development back
+  to their PC (Claude desktop); `docs/HANDOVER.md` has the handover and a reviewed code review.
